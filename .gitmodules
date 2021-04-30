@@ -1,0 +1,15 @@
+[submodule "SuiteSparse"]
+	path = SuiteSparse
+	url = https://github.com/sergiud/SuiteSparse
+[submodule "catamari"]
+	path = catamari
+	url = https://gitlab.com/hodge_star/catamari
+[submodule "mantis"]
+	path = mantis
+	url = https://gitlab.com/alecjacobson/mantis
+[submodule "quotient"]
+	path = quotient
+	url = https://gitlab.com/hodge_star/quotient
+[submodule "libigl"]
+	path = libigl
+	url = https://github.com/libigl/libigl
