@@ -69,6 +69,17 @@ endif()
 target_include_directories(${PROJECT_NAME} PUBLIC catamari/include)
 target_include_directories(${PROJECT_NAME} PUBLIC mantis/include)
 target_include_directories(${PROJECT_NAME} PUBLIC quotient/include)
+target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sympiler-eigen/includes/)
+target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sympiler-eigen//sympiler/sparse_blas/includes/parsy)
+link_directories( ${CMAKE_CURRENT_SOURCE_DIR}/sympiler_eigen//sympiler/lib)
+target_link_libraries(${PROJECT_NAME}
+    lbc
+    sym_sparse_blas
+    sym_dense_blas
+    sympiler_utils
+        ${METIS_LIBRARY} ${METIS_LIBRARIES}
+        )
+
 target_compile_definitions(${PROJECT_NAME} PUBLIC -DCATAMARI_HAVE_OPENBLAS)
 function(add_framework target framework)
     if(APPLE)
@@ -84,3 +95,5 @@ function(add_framework target framework)
     endif()
 endfunction()
 add_framework(${PROJECT_NAME} Accelerate)
+
+add_subdirectory(sympiler-eigen)

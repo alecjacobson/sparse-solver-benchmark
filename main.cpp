@@ -1,5 +1,6 @@
 
 #include "catamari.hpp"
+#include "sympiler_cholesky.h"
 #include <Eigen/Core>
 #include <Eigen/Sparse>
 #include <igl/harmonic.h>
@@ -11,6 +12,7 @@
 #include <Eigen/PardisoSupport>
 #include <Eigen/CholmodSupport>
 #include <tuple>
+#include <iomanip>
 
 template <typename Factor>
 void solve(
@@ -108,6 +110,55 @@ void solve<catamari::SparseLDL<double>>(
 }
 
 
+void solve_sympiler(
+  const std::string & name,
+  Eigen::SparseMatrix<double> & Q,
+  Eigen::MatrixXd & rhs,
+  Eigen::MatrixXd & U)
+{
+ Eigen::SparseMatrix<double> QQ = Q.triangularView<Eigen::Lower>();
+ const auto & tictoc = []()
+ {
+  static double t_start = igl::get_seconds();
+  double diff = igl::get_seconds()-t_start;
+  t_start += diff;
+  return diff;
+ };
+ printf("| %30s | ",name.c_str());
+ tictoc();
+// fact here
+ auto *A = new sym_lib::parsy::CSC;
+ A->nzmax = QQ.nonZeros();
+ A->ncol = A->nrow = QQ.rows();
+ A->p = QQ.outerIndexPtr();
+ A->i = QQ.innerIndexPtr();
+ A->x = QQ.valuePtr();
+ A->stype = -1;
+ A->xtype = SYMPILER_REAL;
+ A->packed = TRUE;
+ A->nz = NULL;
+ A->sorted = TRUE;
+ double *rhs_q = rhs.col(0).data();
+ auto *sym_chol1 = sympiler::sympiler_chol_symbolic(A, rhs_q);
+ sym_chol1->numerical_factorization();
+ const double t_factor = tictoc();
+ printf("%6.2g secs | ",t_factor);
+ tictoc();
+ // solve here
+ auto *sol = sym_chol1->solve_only();
+ const double t_solve = tictoc();
+ U = Eigen::Map< Eigen::Matrix<double,Eigen::Dynamic,1> >(
+   sol,Q.rows(),1);
+ Eigen::MatrixXd rhs_one_col = rhs.col(0);
+ printf("%6.2g secs | ",t_solve);
+ printf("%6.6g |\n",(rhs_one_col-Q*U).array().abs().maxCoeff());
+ delete sym_chol1;
+ delete A;
+ delete []sol;
+}
+
+
+
 int main(int argc, char * argv[])
 {
   setbuf(stdout, NULL);
@@ -135,6 +186,7 @@ int main(int argc, char * argv[])
     Q = M+W;
     Eigen::MatrixXd rhs = M*V;
 
+
     Eigen::MatrixXd U;
     printf("\n");
     printf("|                         Method |      Factor |       Solve |     L∞ norm |\n");
@@ -145,6 +197,7 @@ int main(int argc, char * argv[])
     solve<catamari::SparseLDL<double>>("catamari::SparseLDL",Q,rhs,U);
     solve<Eigen::PardisoLLT<Eigen::SparseMatrix<double>>>("Eigen::PardisoLLT",Q,rhs,U);
     solve<Eigen::SparseLU<Eigen::SparseMatrix<double>,Eigen::COLAMDOrdering<int>>>("Eigen::SparseLU",Q,rhs,U);
-    printf("\n");
+    solve_sympiler("Sympiler::Cholesky",Q ,rhs,U);
+   printf("\n");
   }
 }

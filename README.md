@@ -18,12 +18,14 @@ meshes found commonly in geometry processing.
 ## Clone
 
     git clone --recursive https://github.com/alecjacobson/sparse-solver-benchmark
+you might need to emit the following as well:
+    git submodule update --init --recursive
 
 ## Build
 
     mkdir build
     cd build
-    cmake ../ -DCMAKE_BUILD_TYPE=Release
+    cmake ../ -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=/usr/local/Cellar/gcc/10.2.0_4/bin/g++-10
     make
 
 ## Run
@@ -109,3 +111,40 @@ minifold mesh will be 7 non-zeros per row (on average).
 
 For k=3, the system can get really badly scaled and starts to become more dense
 (~40 non-zeros per row).
+
+I got the following in my Mac (16GB RAM)
+# Harmonic
+
+|                         Method |      Factor |       Solve |     L∞ norm |
+|-------------------------------:|------------:|------------:|------------:|
+|    Eigen::CholmodSupernodalLLT |    1.4 secs |   0.11 secs | 1.33919e-10 |
+|           Eigen::SimplicialLLT |    1.8 secs |   0.14 secs | 9.85347e-11 |
+|          Eigen::SimplicialLDLT |    1.8 secs |   0.14 secs | 6.01932e-11 |
+|            catamari::SparseLDL |      2 secs |   0.12 secs | 1.15886e-10 |
+|              Eigen::PardisoLLT |    2.2 secs |   0.52 secs | 3.30178e-11 |
+|                Eigen::SparseLU |    5.8 secs |   0.22 secs | 8.13434e-11 |
+|             Sympiler::Cholesky |    1.3 secs |  0.039 secs | 2.45269e-11 |
+
+# Biharmonic
+
+|                         Method |      Factor |       Solve |     L∞ norm |
+|-------------------------------:|------------:|------------:|------------:|
+|    Eigen::CholmodSupernodalLLT |    2.5 secs |   0.17 secs | 3.10268e-05 |
+|           Eigen::SimplicialLLT |     14 secs |   0.41 secs | 4.64678e-05 |
+|          Eigen::SimplicialLDLT |     14 secs |   0.44 secs | 2.12954e-05 |
+|            catamari::SparseLDL |     12 secs |   0.43 secs | 8.58138e-05 |
+|              Eigen::PardisoLLT |    4.3 secs |   0.66 secs | 3.91748e-05 |
+|                Eigen::SparseLU |     35 secs |   0.61 secs | 1.20096e-05 |
+|             Sympiler::Cholesky |    2.7 secs |  0.084 secs | 4.04411e-05 |
+
+# Triharmonic
+
+|                         Method |      Factor |       Solve |     L∞ norm |
+|-------------------------------:|------------:|------------:|------------:|
+|    Eigen::CholmodSupernodalLLT |    4.8 secs |    0.3 secs | 56.5885 |
+|           Eigen::SimplicialLLT |     47 secs |   0.86 secs | 61.6743 |
+|          Eigen::SimplicialLDLT |     47 secs |   0.98 secs | 30.9774 |
+|            catamari::SparseLDL |     49 secs |   0.86 secs | 94.3167 |
+|              Eigen::PardisoLLT |      8 secs |   0.94 secs | 25.9679 |
+|                Eigen::SparseLU | 1.5e+02 secs |    1.4 secs | 16.2049 |
+|             Sympiler::Cholesky |    4.6 secs |   0.14 secs | 54.6663 |
