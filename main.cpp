@@ -1,4 +1,8 @@
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "catamari.hpp"
 #include <Eigen/Core>
 #include <Eigen/Sparse>
@@ -11,6 +15,7 @@
 #include <Eigen/PardisoSupport>
 #include <Eigen/CholmodSupport>
 #include <tuple>
+
 
 template <typename Factor>
 void solve(
@@ -111,6 +116,11 @@ void solve<catamari::SparseLDL<double>>(
 int main(int argc, char * argv[])
 {
   setbuf(stdout, NULL);
+#if defined(_OPENMP)
+  fprintf(stderr,"omp_get_num_threads(): %d\n",omp_get_max_threads());
+#endif
+
+
   Eigen::MatrixXd V;
   Eigen::MatrixXi F;
   //igl::triangulated_grid(2,2,V,F);
@@ -145,6 +155,8 @@ int main(int argc, char * argv[])
     solve<catamari::SparseLDL<double>>("catamari::SparseLDL",Q,rhs,U);
     solve<Eigen::PardisoLLT<Eigen::SparseMatrix<double>>>("Eigen::PardisoLLT",Q,rhs,U);
     solve<Eigen::SparseLU<Eigen::SparseMatrix<double>,Eigen::COLAMDOrdering<int>>>("Eigen::SparseLU",Q,rhs,U);
+    solve<Eigen::BiCGSTAB<Eigen::SparseMatrix<double>,Eigen::IncompleteLUT<double>>>("Eigen::BiCGSTAB<IncompleteLUT>",Q,rhs,U);
+    solve<Eigen::ConjugateGradient<Eigen::SparseMatrix<double>,Eigen::Lower,Eigen::IncompleteLUT<double>>>("Eigen::CG<IncompleteLUT>",Q,rhs,U);
     printf("\n");
   }
 }
