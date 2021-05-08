@@ -150,6 +150,8 @@ int main(int argc, char * argv[])
     printf("|                         Method |      Factor |       Solve |     L∞ norm |\n");
     printf("|-------------------------------:|------------:|------------:|------------:|\n");
     solve<Eigen::CholmodSupernodalLLT<Eigen::SparseMatrix<double>>>("Eigen::CholmodSupernodalLLT",Q,rhs,U);
+    solve<Eigen::CholmodSimplicialLLT<Eigen::SparseMatrix<double>>>("Eigen::CholmodSimplicialLLT",Q,rhs,U);
+    solve<Eigen::CholmodSimplicialLDLT<Eigen::SparseMatrix<double>>>("Eigen::CholmodSimplicialLDLT",Q,rhs,U);
     solve<Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> >("Eigen::SimplicialLLT",Q,rhs,U);
     solve<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>("Eigen::SimplicialLDLT",Q,rhs,U);
     solve<catamari::SparseLDL<double>>("catamari::SparseLDL",Q,rhs,U);
