@@ -18,6 +18,11 @@ if(COMPILER_SUPPORTS_MARCH_NATIVE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
 endif()
 
+# openmp
+find_package(OPENMP REQUIRED QUIET)
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 
 # libigl
 find_package(LIBIGL REQUIRED QUIET)
@@ -28,9 +33,8 @@ if(LIBIGL_USE_STATIC_LIBRARY)
 endif()
 list(APPEND SRCFILES main.cpp)
 add_executable(${PROJECT_NAME} ${SRCFILES})
-target_include_directories(${PROJECT_NAME} PUBLIC "include/")
 
-target_link_libraries(${PROJECT_NAME} igl::core )
+target_link_libraries(${PROJECT_NAME} igl::core OpenMP::OpenMP_CXX)
 
 if(IGL_WITH_MKL)
   find_package(MKL REQUIRED)
