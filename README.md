@@ -148,3 +148,49 @@ I got the following in my Mac (16GB RAM)
 |              Eigen::PardisoLLT |      8 secs |   0.94 secs | 25.9679 |
 |                Eigen::SparseLU | 1.5e+02 secs |    1.4 secs | 16.2049 |
 |             Sympiler::Cholesky |    4.6 secs |   0.14 secs | 54.6663 |
+
+
+
+and here is on one processor of the Niagara server with 20 cores:
+omp_get_num_threads(): 20
+# Harmonic
+
+|                         Method |      Factor |       Solve |     L∞ norm |
+|-------------------------------:|------------:|------------:|------------:|
+|    Eigen::CholmodSupernodalLLT |      1 secs |   0.18 secs | 4.60743e-11 |
+|           Eigen::SimplicialLLT |    1.4 secs |   0.12 secs | 7.65179e-11 |
+|          Eigen::SimplicialLDLT |    1.4 secs |   0.12 secs | 4.9007e-11 |
+|            catamari::SparseLDL |    1.8 secs |   0.13 secs | 1.57636e-10 |
+|              Eigen::PardisoLLT |    2.3 secs |    1.2 secs | 5.74722e-11 |
+|                Eigen::SparseLU |    5.8 secs |    0.3 secs | 5.30385e-11 |
+|             Sympiler::Cholesky |   0.75 secs |   0.15 secs | 6.03529e-11 |
+| Eigen::BiCGSTAB<IncompleteLUT> |    2.1 secs |    2.2 secs | 1.68306e-10 |
+|       Eigen::CG<IncompleteLUT> |    2.1 secs |    4.8 secs | 8.66383e-11 |
+
+# Biharmonic
+
+|                         Method |      Factor |       Solve |     L∞ norm |
+|-------------------------------:|------------:|------------:|------------:|
+|    Eigen::CholmodSupernodalLLT |    1.9 secs |   0.24 secs | 8.2039e-05 |
+|           Eigen::SimplicialLLT |     11 secs |   0.42 secs | 2.50812e-05 |
+|          Eigen::SimplicialLDLT |     11 secs |   0.42 secs | 4.33555e-05 |
+|            catamari::SparseLDL |     14 secs |   0.38 secs | 2.55152e-05 |
+|              Eigen::PardisoLLT |    4.1 secs |      1 secs | 7.48361e-05 |
+|                Eigen::SparseLU |     34 secs |   0.74 secs | 3.76737e-05 |
+|             Sympiler::Cholesky |    1.5 secs |    0.2 secs | 2.50423e-05 |
+| Eigen::BiCGSTAB<IncompleteLUT> |     16 secs |    5.6 secs | 8.64272e-05 |
+|       Eigen::CG<IncompleteLUT> |     16 secs |    8.2 secs | 4.05552e-05 |
+
+# Triharmonic
+
+|                         Method |      Factor |       Solve |     L∞ norm |
+|-------------------------------:|------------:|------------:|------------:|
+|    Eigen::CholmodSupernodalLLT |    3.4 secs |   0.37 secs | 35.8193 |
+|           Eigen::SimplicialLLT |     44 secs |   0.88 secs | 73.8148 |
+|          Eigen::SimplicialLDLT |     43 secs |   0.86 secs | 41.754 |
+|            catamari::SparseLDL |     55 secs |   0.82 secs | 72.7858 |
+|              Eigen::PardisoLLT |      7 secs |    1.3 secs | 70.6996 |
+|                Eigen::SparseLU | 1.4e+02 secs |    1.6 secs | 21.1345 |
+|             Sympiler::Cholesky |    3.1 secs |    0.3 secs | 58.1092 |
+| Eigen::BiCGSTAB<IncompleteLUT> |     59 secs |    1.8 secs |    nan |
+|       Eigen::CG<IncompleteLUT> |     59 secs |
