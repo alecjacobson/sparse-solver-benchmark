@@ -144,6 +144,8 @@ void solve_sympiler(
  A->nz = NULL;
  A->sorted = TRUE;
  auto *sym_chol1 = sympiler::sympiler_chol_symbolic(A);
+ //int num_ph_cores= 4;
+ //auto *sym_chol1 = sympiler::sympiler_chol_symbolic(A, num_ph_cores);
  sym_chol1->numerical_factorization();
  const double t_factor = tictoc();
  printf("%6.2g secs | ",t_factor);
