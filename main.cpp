@@ -143,23 +143,20 @@ void solve_sympiler(
  A->packed = TRUE;
  A->nz = NULL;
  A->sorted = TRUE;
- double *rhs_q = rhs.col(0).data();
- auto *sym_chol1 = sympiler::sympiler_chol_symbolic(A, rhs_q);
+ auto *sym_chol1 = sympiler::sympiler_chol_symbolic(A);
  sym_chol1->numerical_factorization();
  const double t_factor = tictoc();
  printf("%6.2g secs | ",t_factor);
  tictoc();
  // solve here
- auto *sol = sym_chol1->solve_only();
+ auto *sol = sym_chol1->solve_only(rhs.data(),rhs.cols());// rhs.cols());
  const double t_solve = tictoc();
- U = Eigen::Map< Eigen::Matrix<double,Eigen::Dynamic,1> >(
-   sol,Q.rows(),1);
- Eigen::MatrixXd rhs_one_col = rhs.col(0);
+ U = Eigen::Map< Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic> >(
+   sol,rhs.rows(),rhs.cols());
  printf("%6.2g secs | ",t_solve);
- printf("%6.6g |\n",(rhs_one_col-Q*U).array().abs().maxCoeff());
+ printf("%6.6g |\n",(rhs-Q*U).array().abs().maxCoeff());
  delete sym_chol1;
  delete A;
- delete []sol;
 }
 
 
@@ -201,6 +198,7 @@ int main(int argc, char * argv[])
     printf("\n");
     printf("|                         Method |      Factor |       Solve |     L∞ norm |\n");
     printf("|-------------------------------:|------------:|------------:|------------:|\n");
+    solve_sympiler("Sympiler::Cholesky",Q ,rhs,U);
     solve<Eigen::CholmodSupernodalLLT<Eigen::SparseMatrix<double>>>("Eigen::CholmodSupernodalLLT",Q,rhs,U);
     solve<Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> >("Eigen::SimplicialLLT",Q,rhs,U);
     solve<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>("Eigen::SimplicialLDLT",Q,rhs,U);
