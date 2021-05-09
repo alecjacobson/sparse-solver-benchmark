@@ -198,7 +198,6 @@ int main(int argc, char * argv[])
     printf("\n");
     printf("|                         Method |      Factor |       Solve |     L∞ norm |\n");
     printf("|-------------------------------:|------------:|------------:|------------:|\n");
-    solve_sympiler("Sympiler::Cholesky",Q ,rhs,U);
     solve<Eigen::CholmodSupernodalLLT<Eigen::SparseMatrix<double>>>("Eigen::CholmodSupernodalLLT",Q,rhs,U);
     solve<Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> >("Eigen::SimplicialLLT",Q,rhs,U);
     solve<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>("Eigen::SimplicialLDLT",Q,rhs,U);
