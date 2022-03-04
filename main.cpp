@@ -12,8 +12,11 @@
 #include <igl/massmatrix.h>
 #include <igl/get_seconds.h>
 #include <igl/matlab_format.h>
+#ifdef IGL_WITH_MKL
 #include <Eigen/PardisoSupport>
+#endif
 #include <Eigen/CholmodSupport>
+#include <Eigen/UmfPackSupport>
 #include <tuple>
 
 
@@ -150,10 +153,13 @@ int main(int argc, char * argv[])
     printf("|                         Method |      Factor |       Solve |     L∞ norm |\n");
     printf("|-------------------------------:|------------:|------------:|------------:|\n");
     solve<Eigen::CholmodSupernodalLLT<Eigen::SparseMatrix<double>>>("Eigen::CholmodSupernodalLLT",Q,rhs,U);
+    solve<Eigen::UmfPackLU<Eigen::SparseMatrix<double>>>("Eigen::UmfPackLU",Q,rhs,U);
     solve<Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> >("Eigen::SimplicialLLT",Q,rhs,U);
     solve<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>("Eigen::SimplicialLDLT",Q,rhs,U);
     solve<catamari::SparseLDL<double>>("catamari::SparseLDL",Q,rhs,U);
+#ifdef IGL_WITH_MKL
     solve<Eigen::PardisoLLT<Eigen::SparseMatrix<double>>>("Eigen::PardisoLLT",Q,rhs,U);
+#endif
     solve<Eigen::SparseLU<Eigen::SparseMatrix<double>,Eigen::COLAMDOrdering<int>>>("Eigen::SparseLU",Q,rhs,U);
     solve<Eigen::BiCGSTAB<Eigen::SparseMatrix<double>,Eigen::IncompleteLUT<double>>>("Eigen::BiCGSTAB<IncompleteLUT>",Q,rhs,U);
     solve<Eigen::ConjugateGradient<Eigen::SparseMatrix<double>,Eigen::Lower,Eigen::IncompleteLUT<double>>>("Eigen::CG<IncompleteLUT>",Q,rhs,U);
