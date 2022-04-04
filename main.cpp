@@ -4,6 +4,7 @@
 #endif
 
 #include "catamari.hpp"
+#include "sympiler_cholesky.h"
 #include <Eigen/Core>
 #include <Eigen/Sparse>
 #include <igl/harmonic.h>
@@ -18,6 +19,7 @@
 #include <Eigen/CholmodSupport>
 #include <Eigen/UmfPackSupport>
 #include <tuple>
+#include <iomanip>
 
 
 template <typename Factor>
@@ -116,6 +118,54 @@ void solve<catamari::SparseLDL<double>>(
 }
 
 
+void solve_sympiler(
+  const std::string & name,
+  Eigen::SparseMatrix<double> & Q,
+  Eigen::MatrixXd & rhs,
+  Eigen::MatrixXd & U)
+{
+ Eigen::SparseMatrix<double> QQ = Q.triangularView<Eigen::Lower>();
+ const auto & tictoc = []()
+ {
+  static double t_start = igl::get_seconds();
+  double diff = igl::get_seconds()-t_start;
+  t_start += diff;
+  return diff;
+ };
+ printf("| %30s | ",name.c_str());
+ tictoc();
+// fact here
+ auto *A = new sym_lib::parsy::CSC;
+ A->nzmax = QQ.nonZeros();
+ A->ncol = A->nrow = QQ.rows();
+ A->p = QQ.outerIndexPtr();
+ A->i = QQ.innerIndexPtr();
+ A->x = QQ.valuePtr();
+ A->stype = -1;
+ A->xtype = SYMPILER_REAL;
+ A->packed = TRUE;
+ A->nz = NULL;
+ A->sorted = TRUE;
+ auto *sym_chol1 = sympiler::sympiler_chol_symbolic(A);
+ //int num_ph_cores= 20; // For running on Niagara, uncomment these two lines
+ //auto *sym_chol1 = sympiler::sympiler_chol_symbolic(A, num_ph_cores);
+ sym_chol1->numerical_factorization();
+ const double t_factor = tictoc();
+ printf("%6.2g secs | ",t_factor);
+ tictoc();
+ // solve here
+ auto *sol = sym_chol1->solve_only(rhs.data(),rhs.cols());// rhs.cols());
+ const double t_solve = tictoc();
+ U = Eigen::Map< Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic> >(
+   sol,rhs.rows(),rhs.cols());
+ printf("%6.2g secs | ",t_solve);
+ printf("%6.6g |\n",(rhs-Q*U).array().abs().maxCoeff());
+ delete sym_chol1;
+ delete A;
+}
+
+
+
 int main(int argc, char * argv[])
 {
   setbuf(stdout, NULL);
@@ -148,6 +198,7 @@ int main(int argc, char * argv[])
     Q = M+W;
     Eigen::MatrixXd rhs = M*V;
 
+
     Eigen::MatrixXd U;
     printf("\n");
     printf("|                         Method |      Factor |       Solve |     L∞ norm |\n");
@@ -161,6 +212,7 @@ int main(int argc, char * argv[])
     solve<Eigen::PardisoLLT<Eigen::SparseMatrix<double>>>("Eigen::PardisoLLT",Q,rhs,U);
 #endif
     solve<Eigen::SparseLU<Eigen::SparseMatrix<double>,Eigen::COLAMDOrdering<int>>>("Eigen::SparseLU",Q,rhs,U);
+    solve_sympiler("Sympiler::Cholesky",Q ,rhs,U);
     solve<Eigen::BiCGSTAB<Eigen::SparseMatrix<double>,Eigen::IncompleteLUT<double>>>("Eigen::BiCGSTAB<IncompleteLUT>",Q,rhs,U);
     solve<Eigen::ConjugateGradient<Eigen::SparseMatrix<double>,Eigen::Lower,Eigen::IncompleteLUT<double>>>("Eigen::CG<IncompleteLUT>",Q,rhs,U);
     printf("\n");

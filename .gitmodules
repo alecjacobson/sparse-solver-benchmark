@@ -13,3 +13,6 @@
 [submodule "libigl"]
 	path = libigl
 	url = https://github.com/libigl/libigl
+[submodule "sympiler-eigen"]
+	path = sympiler-eigen
+	url = https://github.com/sympiler/sympiler-eigen.git

@@ -18,11 +18,43 @@ if(COMPILER_SUPPORTS_MARCH_NATIVE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
 endif()
 
-# openmp
-find_package(OPENMP REQUIRED QUIET)
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+# Find OpenMP
+if(APPLE)
+    #    SET(CMAKE_C_COMPILER "/usr/local/opt/llvm/bin/clang")
+    #    SET(CMAKE_CXX_COMPILER "/usr/local/opt/llvm/bin/clang++")
+    #    SET(OPENMP_LIBRARIES "/usr/local/opt/llvm/lib")
+    #    SET(OPENMP_INCLUDES "/usr/local/opt/llvm/include")
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        set(OpenMP_C "${CMAKE_C_COMPILER}")
+        set(OpenMP_C_FLAGS "-fopenmp=libomp -Wno-unused-command-line-argument")
+        set(OpenMP_C_LIB_NAMES "libomp" "libgomp" "libiomp5")
+        set(OpenMP_libomp_LIBRARY ${OpenMP_C_LIB_NAMES})
+        set(OpenMP_libgomp_LIBRARY ${OpenMP_C_LIB_NAMES})
+        set(OpenMP_libiomp5_LIBRARY ${OpenMP_C_LIB_NAMES})
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(OpenMP_CXX "${CMAKE_CXX_COMPILER}")
+        set(OpenMP_CXX_FLAGS "-fopenmp=libomp -Wno-unused-command-line-argument")
+        set(OpenMP_CXX_LIB_NAMES "libomp" "libgomp" "libiomp5")
+        set(OpenMP_libomp_LIBRARY ${OpenMP_CXX_LIB_NAMES})
+        set(OpenMP_libgomp_LIBRARY ${OpenMP_CXX_LIB_NAMES})
+        set(OpenMP_libiomp5_LIBRARY ${OpenMP_CXX_LIB_NAMES})
+    endif()
+endif()
+
+#find_package(OPENMP)
+find_package(OpenMP)
+
+if (OPENMP_FOUND)
+    #include_directories("${OPENMP_INCLUDES}")
+    #include_directories("/usr/local/include" "/usr/local/opt/llvm/include")
+    link_directories("${OPENMP_LIBRARIES}")
+    #link_directories("/usr/local/lib" "/usr/local/opt/llvm/lib")
+    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+    # set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+endif()
+
 
 # libigl
 find_package(LIBIGL REQUIRED QUIET)
@@ -73,6 +105,17 @@ endif()
 target_include_directories(${PROJECT_NAME} PUBLIC catamari/include)
 target_include_directories(${PROJECT_NAME} PUBLIC mantis/include)
 target_include_directories(${PROJECT_NAME} PUBLIC quotient/include)
+target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sympiler-eigen/includes/)
+target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sympiler-eigen//sympiler/sparse_blas/includes/parsy)
+link_directories( ${CMAKE_CURRENT_SOURCE_DIR}/sympiler_eigen//sympiler/lib)
+target_link_libraries(${PROJECT_NAME}
+    lbc
+    sym_sparse_blas
+    sym_dense_blas
+    sympiler_utils
+        ${METIS_LIBRARY} ${METIS_LIBRARIES}
+        )
+
 target_compile_definitions(${PROJECT_NAME} PUBLIC -DCATAMARI_HAVE_OPENBLAS)
 function(add_framework target framework)
     if(APPLE)
@@ -88,3 +131,5 @@ function(add_framework target framework)
     endif()
 endfunction()
 add_framework(${PROJECT_NAME} Accelerate)
+
+add_subdirectory(sympiler-eigen)
