@@ -44,11 +44,14 @@ jobs:
       - name: Install NVIDIA CUDA toolkit + cuDSS
         # Same package set installed and verified locally on the L40 dev
         # machine (see README): nvcc + cudart + cublas/cusolver/cusparse
-        # headers, plus cuDSS itself.
+        # headers, plus cuDSS itself. libnvjitlink is a runtime dependency of
+        # libcusparse/libcusolver (undefined __nvJitLink* symbols at link
+        # time otherwise) that happened to already be present on the dev
+        # machine from unrelated tooling, so install it explicitly here.
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             cuda-nvcc-12-6 cuda-cudart-dev-12-6 libcublas-dev-12-6 \
-            libcusolver-dev-12-6 libcusparse-dev-12-6 \
+            libcusolver-dev-12-6 libcusparse-dev-12-6 libnvjitlink-12-6 \
             libcudss0-dev-cuda-12 libcudss0-cuda-12
 
       - name: Configure
