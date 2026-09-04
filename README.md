@@ -105,7 +105,7 @@ produces:
 |    7 |         Eigen::CG\<IncompleteLUT\> |      1.7 secs |        3 secs | 8.96274e-11 |
 |    8 |                  Eigen::SparseLU |      5.3 secs |     0.21 secs | 2.37845e-11 |
 |    9 |      Eigen::CholmodSupernodalLLT |      8.2 secs |     0.73 secs | 6.63736e-11 |
-|   10 |        NVIDIA cuSOLVER (Sp Chol) |        0 secs |      9.7 secs | 5.25522e-11 |
+|   10 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |      9.7 secs | 5.25522e-11 |
 |   11 |                 Eigen::UmfPackLU |       28 secs |     0.78 secs | 4.20999e-11 |
 
 # Biharmonic
@@ -119,7 +119,7 @@ produces:
 |    5 |              catamari::SparseLDL |       11 secs |     0.45 secs | 3.05382e-05 |
 |    6 |   Eigen::BiCGSTAB\<IncompleteLUT\> |       11 secs |      4.6 secs | 5.56194e-05 |
 |    7 |         Eigen::CG\<IncompleteLUT\> |       11 secs |      6.2 secs | 4.73183e-05 |
-|    8 |        NVIDIA cuSOLVER (Sp Chol) |        0 secs |       20 secs | 3.40111e-05 |
+|    8 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       20 secs | 3.40111e-05 |
 |    9 |                  Eigen::SparseLU |       35 secs |      0.8 secs | 2.46911e-05 |
 |   10 |      Eigen::CholmodSupernodalLLT |       46 secs |      6.7 secs | 9.99686e-05 |
 |   11 |                 Eigen::UmfPackLU |  1.7e+02 secs |      2.3 secs | 8.19072e-05 |
@@ -130,7 +130,7 @@ produces:
 |-----:|--------------------------------:|------------:|------------:|------------:|
 | 🥇 1 |                     NVIDIA cuDSS |      6.7 secs |   0.0054 secs |     15.7028 |
 | 🥈 2 |                Eigen::PardisoLLT |      8.7 secs |      1.8 secs |       10.86 |
-| 🥉 3 |        NVIDIA cuSOLVER (Sp Chol) |        0 secs |       37 secs |     38.1472 |
+| 🥉 3 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       37 secs |     38.1472 |
 |    4 |            Eigen::SimplicialLDLT |       37 secs |     0.95 secs |     93.8209 |
 |    5 |             Eigen::SimplicialLLT |       38 secs |        1 secs |     39.0697 |
 |    6 |   Eigen::BiCGSTAB\<IncompleteLUT\> |       41 secs |      1.6 secs |         nan |
@@ -144,6 +144,13 @@ produces:
 k=3 reflect genuine non-convergence/divergence on this badly-scaled system,
 not a bug; see the ⚠️ note above and "What are the systems being solved?"
 below for why k=3 is inherently harder.)
+
+\*(fused): cuSOLVER's `cusolverSpDcsrlsvchol` has no separate factor step —
+it fuses reordering + symbolic + numeric factorization + triangular solve
+into one call, repeated once per RHS column (there's no lower-level phased
+Cholesky API in this cuSOLVER version) — so the whole cost is reported under
+Solve rather than a fabricated Factor/Solve split. This is also why it's
+slower than cuDSS, which factors once and solves 3 times.
 
 Obviously [YMMV](https://www.google.com/search?q=YMMV), if you find something
 interesting [let me know!](https://github.com/alecjacobson/sparse-solver-benchmark/issues).

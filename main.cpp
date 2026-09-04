@@ -56,6 +56,10 @@ struct Result
   double residual;
   bool skipped;
   std::string skip_reason;
+  // True when t_factor doesn't represent a real, separately-timed factor
+  // step (e.g. an API that fuses analysis+factor+solve into one call), so
+  // the leaderboard can print "(fused)" instead of a misleading "0 secs".
+  bool fused_factor = false;
 };
 
 static std::vector<Result> g_results;
@@ -73,13 +77,14 @@ static void record(
   double t_solve,
   double residual,
   bool skipped = false,
-  const std::string & skip_reason = "")
+  const std::string & skip_reason = "",
+  bool fused_factor = false)
 {
-  g_results.push_back({k, name, t_factor, t_solve, residual, skipped, skip_reason});
+  g_results.push_back({k, name, t_factor, t_solve, residual, skipped, skip_reason, fused_factor});
   if(g_csv)
   {
-    fprintf(g_csv,"%d,%s,%.9g,%.9g,%.9g,%d\n",
-      k, name.c_str(), t_factor, t_solve, residual, skipped?1:0);
+    fprintf(g_csv,"%d,%s,%.9g,%.9g,%.9g,%d,%d\n",
+      k, name.c_str(), t_factor, t_solve, residual, skipped?1:0, fused_factor?1:0);
   }
   if(g_check_mode && !skipped && !(residual <= g_check_tol[k]))
   {
@@ -375,7 +380,8 @@ void solve_cusolver(
   CUSPARSE_CHECK(cusparseDestroyMatDescr(descr));
   CUSOLVER_CHECK(cusolverSpDestroy(handle));
 
-  record(k, name, 0, t_solve, (rhs-Q*U).array().abs().maxCoeff());
+  record(k, name, 0, t_solve, (rhs-Q*U).array().abs().maxCoeff(),
+    /*skipped=*/false, /*skip_reason=*/"", /*fused_factor=*/true);
 }
 
 #endif
@@ -425,6 +431,7 @@ static void print_leaderboard(int k)
   printf("| Rank |                          Method |      Factor |       Solve |     L∞ norm |\n");
   printf("|-----:|--------------------------------:|------------:|------------:|------------:|\n");
   int rank = 0;
+  bool any_fused = false;
   for(const auto & r : rows)
   {
     if(r.skipped)
@@ -434,8 +441,22 @@ static void print_leaderboard(int k)
     }
     rank++;
     const char * medal = rank==1 ? "\U0001F947" : rank==2 ? "\U0001F948" : rank==3 ? "\U0001F949" : "  ";
-    printf("| %s%2d | %32s | %8.2g secs | %8.2g secs | %11.6g |\n",
-      medal,rank,r.name.c_str(),r.t_factor,r.t_solve,r.residual);
+    if(r.fused_factor)
+    {
+      any_fused = true;
+      printf("| %s%2d | %32s |     (fused)* | %8.2g secs | %11.6g |\n",
+        medal,rank,r.name.c_str(),r.t_solve,r.residual);
+    }
+    else
+    {
+      printf("| %s%2d | %32s | %8.2g secs | %8.2g secs | %11.6g |\n",
+        medal,rank,r.name.c_str(),r.t_factor,r.t_solve,r.residual);
+    }
+  }
+  if(any_fused)
+  {
+    printf("\n*(fused): this solver's API has no separate factor step; the whole\n");
+    printf(" analysis+factor+solve cost is reported under Solve instead.\n");
   }
   printf("\n");
 }
@@ -462,7 +483,7 @@ int main(int argc, char * argv[])
   if(!csv_path.empty())
   {
     g_csv = fopen(csv_path.c_str(),"w");
-    fprintf(g_csv,"k,method,factor_secs,solve_secs,linf_residual,skipped\n");
+    fprintf(g_csv,"k,method,factor_secs,solve_secs,linf_residual,skipped,fused_factor\n");
   }
 
   fprintf(stderr,"# %s\n",machine_info().c_str());
