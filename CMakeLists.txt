@@ -19,11 +19,11 @@ if(COMPILER_SUPPORTS_MARCH_NATIVE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
 endif()
 
-# openmp
-find_package(OpenMP REQUIRED QUIET)
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+# openmp (optional: only used for one diagnostic thread-count print in
+# main.cpp, guarded by #ifdef _OPENMP. Not REQUIRED since AppleClang on
+# macOS has no OpenMP support without Homebrew's libomp + extra flags, which
+# CI's macOS job intentionally doesn't install to keep that job minimal.)
+find_package(OpenMP QUIET)
 
 # libigl (header-only igl::core target; add_subdirectory instead of the old
 # find_package(LIBIGL) shim which predates libigl's target-based CMake build)
@@ -31,7 +31,10 @@ add_subdirectory(libigl)
 
 add_executable(${PROJECT_NAME} main.cpp)
 
-target_link_libraries(${PROJECT_NAME} igl::core OpenMP::OpenMP_CXX)
+target_link_libraries(${PROJECT_NAME} igl::core)
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(${PROJECT_NAME} OpenMP::OpenMP_CXX)
+endif()
 
 if(IGL_WITH_MKL)
   # Ubuntu's intel-mkl/libmkl-full-dev package predates Intel's oneAPI
