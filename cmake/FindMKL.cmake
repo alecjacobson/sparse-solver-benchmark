@@ -347,7 +347,9 @@ ENDIF (NOT MKL_LIBRARIES)
 
 # Include files
 IF (MKL_LIBRARIES)
-  FIND_PATH(MKL_INCLUDE_DIR "mkl_cblas.h")
+  # Ubuntu's libmkl-full-dev package installs headers under /usr/include/mkl
+  # rather than directly on the default include search path.
+  FIND_PATH(MKL_INCLUDE_DIR "mkl_cblas.h" HINTS /usr/include/mkl /usr/include)
   MARK_AS_ADVANCED(MKL_INCLUDE_DIR)
 ENDIF (MKL_LIBRARIES)
 
