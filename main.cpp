@@ -67,7 +67,10 @@ static FILE * g_csv = nullptr;
 static bool g_check_mode = false;
 // Looser tolerance for higher k: the k-harmonic systems get increasingly
 // ill-conditioned/dense (see README), so residuals legitimately grow with k.
-static double g_check_tol[4] = {0, 1e-4, 1e-1, 1e3};
+// Index 0 unused, 1-3 are the flattened Harmonic/Biharmonic/Triharmonic
+// systems, 4-5 are the mixed (unflattened, indefinite) Biharmonic/
+// Triharmonic systems (tolerances tuned empirically, see verification notes).
+static double g_check_tol[6] = {0, 1e-4, 1e-1, 1e3, 1e-1, 1};
 static bool g_check_failed = false;
 
 static void record(
@@ -111,6 +114,18 @@ auto cap_iterations(Factor & factor, int) -> decltype(factor.setMaxIterations(0)
 template <typename Factor>
 void cap_iterations(Factor &, long) {}
 
+static const char * eigen_info_string(Eigen::ComputationInfo info)
+{
+  switch(info)
+  {
+    case Eigen::Success: return "Success";
+    case Eigen::NumericalIssue: return "NumericalIssue (not SPD/singular?)";
+    case Eigen::NoConvergence: return "NoConvergence";
+    case Eigen::InvalidInput: return "InvalidInput";
+    default: return "Unknown";
+  }
+}
+
 template <typename Factor>
 void solve(
   const std::string & name,
@@ -124,6 +139,20 @@ void solve(
   cap_iterations(factor, 0);
   factor.compute(Q);
   const double t_factor = timer.toc();
+  // Only gate on info() for the mixed/indefinite systems (k>=4): there,
+  // NumericalIssue reliably means "this SPD-only algorithm can't handle
+  // indefinite input," worth a clean skip. For the flattened k=1..3 systems
+  // (always SPD, just sometimes ill-conditioned — see the k=3 "badly scaled"
+  // note below), some backends (observed: UmfPackLU on the triharmonic
+  // dragon-mesh system) report NumericalIssue for a near-singular-but-still
+  // meaningful result; skipping those would silently drop real, if
+  // inaccurate, data that used to show up in the leaderboard.
+  if(k>=4 && factor.info() != Eigen::Success)
+  {
+    record(k, name, t_factor, 0, 0, true,
+      std::string("factorization failed: ") + eigen_info_string(factor.info()));
+    return;
+  }
   U = factor.solve(rhs);
   const double t_solve = timer.toc();
   record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff());
@@ -269,7 +298,8 @@ void solve_cudss(
   int k,
   const Eigen::SparseMatrix<double> & Q,
   const Eigen::MatrixXd & rhs,
-  Eigen::MatrixXd & U)
+  Eigen::MatrixXd & U,
+  cudssMatrixType_t mtype = CUDSS_MTYPE_SPD)
 {
   if(!cuda_device_available())
   {
@@ -297,16 +327,39 @@ void solve_cudss(
 
   cudssMatrix_t A, B, X;
   CUDSS_CHECK(cudssMatrixCreateCsr(&A,n,n,A_csr.nnz,A_csr.row_ptr,nullptr,A_csr.col_idx,A_csr.val,
-    CUDSS_R_32I,CUDSS_R_32I,CUDSS_R_64F,CUDSS_MTYPE_SPD,CUDSS_MVIEW_FULL,CUDSS_BASE_ZERO));
+    CUDSS_R_32I,CUDSS_R_32I,CUDSS_R_64F,mtype,CUDSS_MVIEW_FULL,CUDSS_BASE_ZERO));
   CUDSS_CHECK(cudssMatrixCreateDn(&B,n,nrhs,n,d_b,CUDSS_R_64F,CUDSS_LAYOUT_COL_MAJOR));
   CUDSS_CHECK(cudssMatrixCreateDn(&X,n,nrhs,n,d_x,CUDSS_R_64F,CUDSS_LAYOUT_COL_MAJOR));
 
+  // Unlike the setup calls above (real bugs if they fail), factorization can
+  // legitimately fail here (e.g. an indefinite matrix passed with a wrong/
+  // unsupported mtype) — report it as a skipped result instead of aborting
+  // the whole benchmark.
+  const auto cleanup = [&]()
+  {
+    cudssMatrixDestroy(A);
+    cudssMatrixDestroy(B);
+    cudssMatrixDestroy(X);
+    cudssDataDestroy(handle,data);
+    cudssConfigDestroy(config);
+    cudssDestroy(handle);
+    cudaFree(d_b);
+    cudaFree(d_x);
+  };
+
   Timer timer;
-  CUDSS_CHECK(cudssExecute(handle,CUDSS_PHASE_REORDERING,config,data,A,X,B));
-  CUDSS_CHECK(cudssExecute(handle,CUDSS_PHASE_SYMBOLIC_FACTORIZATION,config,data,A,X,B));
-  CUDSS_CHECK(cudssExecute(handle,CUDSS_PHASE_FACTORIZATION,config,data,A,X,B));
-  CUDA_CHECK(cudaDeviceSynchronize());
+  cudssStatus_t status = cudssExecute(handle,CUDSS_PHASE_REORDERING,config,data,A,X,B);
+  if(status==CUDSS_STATUS_SUCCESS) status = cudssExecute(handle,CUDSS_PHASE_SYMBOLIC_FACTORIZATION,config,data,A,X,B);
+  if(status==CUDSS_STATUS_SUCCESS) status = cudssExecute(handle,CUDSS_PHASE_FACTORIZATION,config,data,A,X,B);
+  if(status==CUDSS_STATUS_SUCCESS) status = cudaDeviceSynchronize()==cudaSuccess ? CUDSS_STATUS_SUCCESS : CUDSS_STATUS_EXECUTION_FAILED;
   const double t_factor = timer.toc();
+  if(status != CUDSS_STATUS_SUCCESS)
+  {
+    cleanup();
+    record(k, name, t_factor, 0, 0, true,
+      std::string("cuDSS factorization failed: status ")+std::to_string((int)status));
+    return;
+  }
 
   CUDSS_CHECK(cudssExecute(handle,CUDSS_PHASE_SOLVE,config,data,A,X,B));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -315,14 +368,7 @@ void solve_cudss(
   U.resize(n,nrhs);
   CUDA_CHECK(cudaMemcpy(U.data(),d_x,n*nrhs*sizeof(double),cudaMemcpyDeviceToHost));
 
-  CUDSS_CHECK(cudssMatrixDestroy(A));
-  CUDSS_CHECK(cudssMatrixDestroy(B));
-  CUDSS_CHECK(cudssMatrixDestroy(X));
-  CUDSS_CHECK(cudssDataDestroy(handle,data));
-  CUDSS_CHECK(cudssConfigDestroy(config));
-  CUDSS_CHECK(cudssDestroy(handle));
-  cudaFree(d_b);
-  cudaFree(d_x);
+  cleanup();
 
   record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff());
 }
@@ -385,6 +431,126 @@ void solve_cusolver(
 }
 
 #endif
+
+// Build the "mixed" (unflattened) FEM k-harmonic block system: instead of
+// eliminating auxiliary variables via M⁻¹ (as igl::harmonic does to produce
+// the flattened Wᵏ = Wᵏ⁻¹M⁻¹L), keep them explicit. This is sparser but the
+// resulting symmetric block system is indefinite instead of SPD.
+//
+//   order=2 (biharmonic), unknowns (u, a₁), a₁ = M⁻¹Lu:
+//     [ M   L ] [u ]   [Mx]
+//     [ L  -M ] [a₁] = [0 ]
+//
+//   order=3 (triharmonic), unknowns (u, a₁, λ), a₁=M⁻¹Lu, λ=M⁻¹La₁:
+//     [ M   0   L ] [u ]   [Mx]
+//     [ 0   L  -M ] [a₁] = [0 ]
+//     [ L  -M   0 ] [λ ]   [0 ]
+static void build_mixed_system(
+  int order,
+  const Eigen::SparseMatrix<double> & L,
+  const Eigen::SparseMatrix<double> & M,
+  const Eigen::MatrixXd & V,
+  Eigen::SparseMatrix<double> & Q,
+  Eigen::MatrixXd & rhs)
+{
+  const int n = (int)L.rows();
+  const int nb = order;
+  std::vector<Eigen::Triplet<double>> triplets;
+  triplets.reserve((L.nonZeros()+M.nonZeros())*2);
+
+  const auto add_block = [&](int block_row, int block_col, const Eigen::SparseMatrix<double> & A, double sign)
+  {
+    const int ro = block_row*n;
+    const int co = block_col*n;
+    for(int c=0;c<A.outerSize();++c)
+    {
+      for(Eigen::SparseMatrix<double>::InnerIterator it(A,c); it; ++it)
+      {
+        triplets.emplace_back(ro+it.row(), co+it.col(), sign*it.value());
+      }
+    }
+  };
+
+  if(order == 2)
+  {
+    add_block(0,0,M, 1); add_block(0,1,L, 1);
+    add_block(1,0,L, 1); add_block(1,1,M,-1);
+  }
+  else // order == 3
+  {
+    add_block(0,0,M, 1);                 add_block(0,2,L, 1);
+                  add_block(1,1,L, 1);    add_block(1,2,M,-1);
+    add_block(2,0,L, 1); add_block(2,1,M,-1);
+  }
+
+  Q.resize(nb*n,nb*n);
+  Q.setFromTriplets(triplets.begin(),triplets.end());
+
+  rhs = Eigen::MatrixXd::Zero(nb*n, V.cols());
+  rhs.topRows(n) = M*V;
+}
+
+// catamari's genuine symmetric-indefinite LDLᵀ mode (as opposed to the
+// Cholesky-only specialization above), for the mixed/indefinite systems.
+// A standalone function rather than another solve<> specialization since
+// which factorization type to use depends on the system, not just the type.
+void solve_catamari_ldl(
+  const std::string & name,
+  int k,
+  const Eigen::SparseMatrix<double> & Q,
+  const Eigen::MatrixXd & rhs,
+  Eigen::MatrixXd & U)
+{
+  catamari::CoordinateMatrix<double> matrix;
+  matrix.Resize(Q.rows(), Q.cols());
+  matrix.ReserveEntryAdditions(Q.nonZeros());
+  for(int c=0; c<Q.outerSize(); ++c)
+  {
+    for(Eigen::SparseMatrix<double>::InnerIterator it(Q,c); it; ++it)
+    {
+      matrix.QueueEntryAddition(it.row(), it.col(), it.value());
+    }
+  }
+  matrix.FlushEntryQueues();
+
+  Timer timer;
+  catamari::SparseLDLControl<double> ldl_control;
+  ldl_control.SetFactorizationType(catamari::kLDLTransposeFactorization);
+
+  catamari::SparseLDL<double> ldl;
+  const catamari::SparseLDLResult<double> result = ldl.Factor(matrix, ldl_control);
+  const double t_factor = timer.toc();
+
+  if(result.num_successful_pivots != Q.rows())
+  {
+    record(k, name, t_factor, 0, 0, true,
+      "factorization failed: incomplete pivoting (indefinite/singular)");
+    return;
+  }
+
+  catamari::BlasMatrix<double> right_hand_sides;
+  right_hand_sides.Resize(rhs.rows(), rhs.cols());
+  for(int i = 0;i<rhs.rows();i++)
+  {
+    for(int j = 0;j<rhs.cols();j++)
+    {
+      right_hand_sides(i, j) = rhs(i,j);
+    }
+  }
+
+  ldl.Solve(&right_hand_sides.view);
+  const double t_solve = timer.toc();
+
+  U.resize(rhs.rows(),rhs.cols());
+  for(int i = 0;i<rhs.rows();i++)
+  {
+    for(int j = 0;j<rhs.cols();j++)
+    {
+      U(i,j) = right_hand_sides(i, j);
+    }
+  }
+  record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff());
+}
 
 static std::string machine_info()
 {
@@ -514,35 +680,110 @@ int main(int argc, char * argv[])
   Eigen::SparseMatrix<double> M;
   igl::massmatrix(V,F,igl::MASSMATRIX_TYPE_DEFAULT,M);
 
-  for(int k = 1;k<=3;k++)
+  // k=1,2,3: flattened SPD k-harmonic systems (Q=M+Wᵏ, igl::harmonic).
+  // k=4,5: mixed (unflattened) biharmonic/triharmonic block systems built by
+  // build_mixed_system() above — same underlying PDE, but symmetric
+  // indefinite instead of SPD, exercising solver behavior on harder input.
+  for(int k = 1;k<=5;k++)
   {
+    const bool is_mixed = k>=4;
     switch(k)
     {
       case 1: printf("# Harmonic\n"); break;
       case 2: printf("# Biharmonic\n"); break;
       case 3: printf("# Triharmonic\n"); break;
+      case 4: printf("# Mixed Biharmonic (unflattened, indefinite)\n"); break;
+      case 5: printf("# Mixed Triharmonic (unflattened, indefinite)\n"); break;
     }
 
-    Eigen::SparseMatrix<double> W;
-    igl::harmonic(L,M,k,W);
     Eigen::SparseMatrix<double> Q;
-    Q = M+W;
-    Eigen::MatrixXd rhs = M*V;
+    Eigen::MatrixXd rhs;
+    if(!is_mixed)
+    {
+      Eigen::SparseMatrix<double> W;
+      igl::harmonic(L,M,k,W);
+      Q = M+W;
+      rhs = M*V;
+    }
+    else
+    {
+      build_mixed_system(k==4 ? 2 : 3,L,M,V,Q,rhs);
+    }
 
     Eigen::MatrixXd U;
 #ifdef IGL_WITH_CHOLMOD
     solve<Eigen::CholmodSupernodalLLT<Eigen::SparseMatrix<double>>>("Eigen::CholmodSupernodalLLT",k,Q,rhs,U);
-    solve<Eigen::UmfPackLU<Eigen::SparseMatrix<double>>>("Eigen::UmfPackLU",k,Q,rhs,U);
+    if(k == 5)
+    {
+      // UmfPackLU's own internal MKL BLAS3 calls (umfdi_blas3_update) spin
+      // up a fresh OpenMP thread team per call; on the mixed triharmonic
+      // system's 2.16M-row/3-block structure the catastrophic fill-in from
+      // this system's sparsity pattern produces so many of these tiny
+      // updates that it exhausts OS thread/process limits and crashes
+      // (verified with gdb, reproducible). Skip rather than risk crashing
+      // the whole benchmark; every other solver still runs on it.
+      record(k, "Eigen::UmfPackLU", 0, 0, 0, true,
+        "known crash risk: excessive MKL thread churn on this system's fill-in");
+    }
+    else
+    {
+      solve<Eigen::UmfPackLU<Eigen::SparseMatrix<double>>>("Eigen::UmfPackLU",k,Q,rhs,U);
+    }
 #endif
     solve<Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> >("Eigen::SimplicialLLT",k,Q,rhs,U);
-    solve<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>("Eigen::SimplicialLDLT",k,Q,rhs,U);
-    solve<catamari::SparseLDL<double>>("catamari::SparseLDL",k,Q,rhs,U);
+    if(k == 5)
+    {
+      // Eigen::SimplicialLDLT has no pivoting; verified with gdb that it
+      // segfaults (SIGSEGV inside factorize_preordered) on the mixed
+      // triharmonic system's 2.16M-row genuinely indefinite matrix — a real
+      // out-of-bounds access in Eigen's own unpivoted LDLT at this scale,
+      // not just a slow/inaccurate result. Skip rather than crash; the
+      // pivoted PardisoLDLT and catamari LDLᵀ still exercise this question.
+      record(k, "Eigen::SimplicialLDLT", 0, 0, 0, true,
+        "known crash: SIGSEGV in Eigen's unpivoted LDLT at this scale");
+    }
+    else
+    {
+      solve<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>("Eigen::SimplicialLDLT",k,Q,rhs,U);
+    }
+    if(is_mixed)
+    {
+      solve_catamari_ldl("catamari::SparseLDL (LDLᵀ)",k,Q,rhs,U);
+    }
+    else
+    {
+      solve<catamari::SparseLDL<double>>("catamari::SparseLDL",k,Q,rhs,U);
+    }
 #ifdef IGL_WITH_MKL
-    solve<Eigen::PardisoLLT<Eigen::SparseMatrix<double>>>("Eigen::PardisoLLT",k,Q,rhs,U);
+    if(k == 5)
+    {
+      // MKL Pardiso's reordering (both METIS and minimum-degree — verified
+      // with gdb) hangs, not just fails, on the mixed triharmonic system's
+      // sparsity pattern (its λ block has an all-zero diagonal, inherent to
+      // this saddle-point/KKT system; Pardiso's ordering heuristics appear
+      // not to handle that gracefully at this size). Skip rather than risk
+      // hanging the whole benchmark; every other solver still runs on it.
+      const char * reason = "known Pardiso reordering hang on this system's sparsity pattern";
+      record(k, "Eigen::PardisoLLT", 0, 0, 0, true, reason);
+      record(k, "Eigen::PardisoLDLT", 0, 0, 0, true, reason);
+    }
+    else
+    {
+      solve<Eigen::PardisoLLT<Eigen::SparseMatrix<double>>>("Eigen::PardisoLLT",k,Q,rhs,U);
+      solve<Eigen::PardisoLDLT<Eigen::SparseMatrix<double>>>("Eigen::PardisoLDLT",k,Q,rhs,U);
+    }
 #endif
 #ifdef IGL_WITH_CUDSS
-    solve_cudss("NVIDIA cuDSS",k,Q,rhs,U);
-    solve_cusolver("NVIDIA cuSOLVER (Sp Chol)",k,Q,rhs,U);
+    solve_cudss("NVIDIA cuDSS",k,Q,rhs,U,is_mixed ? CUDSS_MTYPE_SYMMETRIC : CUDSS_MTYPE_SPD);
+    if(is_mixed)
+    {
+      record(k, "NVIDIA cuSOLVER (Sp Chol)", 0, 0, 0, true,
+        "no indefinite/LDLT solver in this cuSOLVER version");
+    }
+    else
+    {
+      solve_cusolver("NVIDIA cuSOLVER (Sp Chol)",k,Q,rhs,U);
+    }
 #endif
     solve<Eigen::SparseLU<Eigen::SparseMatrix<double>,Eigen::COLAMDOrdering<int>>>("Eigen::SparseLU",k,Q,rhs,U);
     solve<Eigen::BiCGSTAB<Eigen::SparseMatrix<double>,Eigen::IncompleteLUT<double>>>("Eigen::BiCGSTAB<IncompleteLUT>",k,Q,rhs,U);
