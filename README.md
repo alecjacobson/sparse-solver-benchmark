@@ -28,6 +28,12 @@ solvers can't handle at all, and a couple can't even handle *gracefully* (see
 >   handles them well; Eigen's own *unpivoted* `SimplicialLDLT` does not (see
 >   ⚠️ below). General LU (`SparseLU`) always works, as expected, since it
 >   makes no definiteness assumption.
+> - **NASOQ LBL** (a QP solver's symmetric-indefinite linear solver
+>   component) is competitive and accurate everywhere it runs — including
+>   the indefinite mixed biharmonic system — but crashes on the mixed
+>   triharmonic system specifically (see ⚠️ below); its first "solve" call
+>   used to look absurdly slow (16-24s on tiny problems) due to two
+>   independent upstream bugs, both fixed here (see ⚠️ below).
 > - **Eigen's iterative solvers** (BiCGSTAB/CG + IncompleteLUT) get
 >   unreliable as k grows and are unreliable on indefinite systems (CG in
 >   particular, since it assumes SPD) — this benchmark caps them at 200
@@ -60,7 +66,7 @@ solvers can't handle at all, and a couple can't even handle *gracefully* (see
 > SuiteSparse's own BLAS/LAPACK to avoid this.
 
 > [!WARNING]
-> **Three solvers are known to crash — not just fail — on the mixed
+> **Four solvers are known to crash or hang — not just fail — on the mixed
 > triharmonic system specifically** (a 2.16M-row genuinely indefinite
 > saddle-point matrix on the example mesh) and are skipped there with an
 > explicit reason, verified with `gdb`:
@@ -75,9 +81,53 @@ solvers can't handle at all, and a couple can't even handle *gracefully* (see
 > - `Eigen::SimplicialLDLT`: segfaults (`SIGSEGV` inside
 >   `factorize_preordered`) — a real out-of-bounds access in Eigen's own
 >   *unpivoted* LDLT at this scale, not just an inaccurate result.
+> - `NASOQ LBL`: root-caused with `valgrind` down to a genuine one-off
+>   heap buffer overflow in NASOQ's own `SolverSettings::find_perturbation()`
+>   (`src/QP/linear_solver_wrapper.cpp`), which assumes
+>   `AorSM->x[AorSM->p[i]]` is always column `i`'s diagonal entry. This
+>   system's λ block has a structurally all-zero diagonal (same block that
+>   trips up Pardiso's reordering above), so every one of its columns has
+>   zero stored lower-triangular entries — for the last such column,
+>   `p[i]` equals `nnz`, and the code reads/writes exactly one `double` past
+>   the end of the CSC value array. That small heap corruption then cascades
+>   into an intermittent, memory-layout-dependent `SIGSEGV` later, deep
+>   inside `libmetis.so.5`'s minimum-degree ordering (`genmmd`/`mmdelm`,
+>   reached via NASOQ's `symbolic_analysis_lin_solve()` → `METIS_NodeND()`)
+>   — which is why it doesn't crash on every single run. Reproduces on a
+>   tiny synthetic 1200-row mixed triharmonic system, standalone (i.e.
+>   independent of this benchmark) against NASOQ's own unmodified
+>   `LBL_Eigen` example — see
+>   [sympiler/nasoq#33](https://github.com/sympiler/nasoq/issues/33).
 >
 > These are all skipped only for that one system (`k==5` in `main.cpp`); they
 > run normally everywhere else, including the smaller mixed biharmonic system.
+
+> [!WARNING]
+> **NASOQ LBL's `solve_only()` looked absurdly slow (16-24 seconds!) on
+> problems from 400 rows to 1.4M rows alike** — tracked down to two
+> independent bugs in NASOQ itself, not this benchmark's usage:
+> 1. NASOQ's own `eigen_interface` example sets `req_ref_iter=2`, requesting
+>    internal GMRES-based iterative refinement (`pmgmres_ldlt_auto`) after
+>    every direct solve — pure overhead here, since this benchmark already
+>    validates accuracy via its own downstream residual check like every
+>    other solver. Fixed locally by setting `req_ref_iter=0`.
+> 2. The real cost: `SolverSettings::num_thread` does *not* control the
+>    OpenMP team size of the actual triangular-solve kernels
+>    (`H2LeveledBlockedLsolve`/`LTsolve`) — they use a bare
+>    `#pragma omp parallel` with no `num_threads()` clause, and NASOQ's only
+>    `omp_set_num_threads()` call site in the whole codebase is commented
+>    out. So every `solve_only()` call was spinning up
+>    `omp_get_max_threads()` (128 on this machine) OpenMP threads regardless
+>    of the configured thread count — pure thread-team creation overhead,
+>    not real work. Fixed locally by calling `omp_set_num_threads(1)`
+>    ourselves around the NASOQ calls (save/restore, so it doesn't affect
+>    other solvers).
+>
+> Together: **16-24 seconds → sub-millisecond** for `solve_only()`. Filed
+> upstream as [sympiler/nasoq#31](https://github.com/sympiler/nasoq/issues/31)
+> with [sympiler/nasoq#32](https://github.com/sympiler/nasoq/pull/32) (a real
+> fix threading a `num_threads` parameter through the call chain, rather than
+> this benchmark's coarser process-wide `omp_set_num_threads()` workaround).
 
 ## Clone
 
@@ -99,12 +149,25 @@ warning if their dependency isn't found):
 | `IGL_WITH_MKL`      | Intel MKL Pardiso                                   |
 | `IGL_WITH_GPL`      | GPL-licensed Eigen sparse solver code                |
 | `IGL_WITH_CUDSS`    | NVIDIA cuDSS + cuSOLVER (requires the CUDA toolkit) |
+| `IGL_WITH_NASOQ`    | NASOQ's LBL parallel symmetric-indefinite solver (requires `IGL_WITH_MKL` for its BLAS backend) |
 
 ## Run
 
     ./sparse_solver_benchmark [path to triangle mesh]
     ./sparse_solver_benchmark --grid 20 --check   # fast synthetic-mesh correctness check
     ./sparse_solver_benchmark mesh.ply --csv results.csv   # also dump raw results
+    ./sparse_solver_benchmark mesh.ply --only nasoq        # only run solvers matching "nasoq"
+    ./sparse_solver_benchmark mesh.ply --exclude umfpack,sparselu   # skip the slow ones
+
+`--only`/`--exclude` take a comma-separated (repeatable) list of
+case-insensitive substrings matched against each solver's printed name
+(e.g. `--only nasoq` runs just NASOQ LBL; `--exclude umfpack,sparselu` skips
+the two slowest general-purpose solvers on the big meshes). A filtered-out
+solver isn't run at all — it doesn't even appear as a `skipped` row — so
+this is meant for fast local iteration on one solver at a time (e.g. while
+debugging a specific solver against the full dragon mesh, without waiting
+for `SparseLU`/`CG`/etc. to grind through every k), not for the leaderboard
+tables below, which always run every solver.
 
 ## Testing
 
@@ -132,81 +195,86 @@ produces:
 
 | Rank |                          Method |      Factor |       Solve |     L∞ norm |
 |-----:|--------------------------------:|------------:|------------:|------------:|
-| 🥇 1 |            Eigen::SimplicialLDLT |      1.3 secs |     0.13 secs | 1.12086e-10 |
-| 🥈 2 |             Eigen::SimplicialLLT |      1.4 secs |     0.13 secs | 4.55334e-11 |
-| 🥉 3 |              catamari::SparseLDL |      1.5 secs |      0.1 secs | 3.82439e-11 |
-|    4 |                     NVIDIA cuDSS |      2.2 secs |   0.0023 secs | 1.59312e-10 |
-|    5 |   Eigen::BiCGSTAB\<IncompleteLUT\> |      1.7 secs |      1.4 secs | 1.23985e-10 |
-|    6 |               Eigen::PardisoLDLT |      3.4 secs |      1.2 secs | 1.04873e-10 |
-|    7 |                Eigen::PardisoLLT |      3.5 secs |      1.2 secs | 7.58549e-11 |
-|    8 |         Eigen::CG\<IncompleteLUT\> |      1.7 secs |      3.1 secs | 8.96274e-11 |
-|    9 |                  Eigen::SparseLU |      5.6 secs |     0.24 secs | 2.37845e-11 |
-|   10 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |      9.6 secs | 5.25522e-11 |
-|   11 |      Eigen::CholmodSupernodalLLT |      8.7 secs |        1 secs | 6.63736e-11 |
-|   12 |                 Eigen::UmfPackLU |       44 secs |     0.64 secs | 4.20999e-11 |
+| 🥇 1 |             Eigen::SimplicialLLT |      1.2 secs |     0.13 secs | 4.55334e-11 |
+| 🥈 2 |            Eigen::SimplicialLDLT |      1.2 secs |     0.13 secs | 1.12086e-10 |
+| 🥉 3 |              catamari::SparseLDL |      1.4 secs |     0.11 secs | 3.82439e-11 |
+|    4 |                     NVIDIA cuDSS |      2.2 secs |   0.0022 secs | 1.59312e-10 |
+|    5 |                        NASOQ LBL |      2.6 secs |     0.17 secs | 1.09436e-10 |
+|    6 |   Eigen::BiCGSTAB\<IncompleteLUT\> |      1.6 secs |      1.3 secs | 1.23985e-10 |
+|    7 |         Eigen::CG\<IncompleteLUT\> |      1.6 secs |      2.8 secs | 8.96274e-11 |
+|    8 |                Eigen::PardisoLLT |      3.3 secs |      1.1 secs | 7.58549e-11 |
+|    9 |               Eigen::PardisoLDLT |      3.2 secs |      1.3 secs | 1.04873e-10 |
+|   10 |                  Eigen::SparseLU |      4.9 secs |     0.18 secs | 2.37845e-11 |
+|   11 |      Eigen::CholmodSupernodalLLT |      6.7 secs |     0.75 secs | 6.63736e-11 |
+|   12 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |      9.2 secs | 5.25522e-11 |
+|   13 |                 Eigen::UmfPackLU |       28 secs |     0.76 secs | 4.20999e-11 |
 
 # Biharmonic
 
 | Rank |                          Method |      Factor |       Solve |     L∞ norm |
 |-----:|--------------------------------:|------------:|------------:|------------:|
-| 🥇 1 |                     NVIDIA cuDSS |      4.1 secs |    0.014 secs | 0.000121154 |
-| 🥈 2 |                Eigen::PardisoLLT |        5 secs |      1.2 secs | 6.93083e-05 |
-| 🥉 3 |               Eigen::PardisoLDLT |      5.1 secs |      1.3 secs | 4.78335e-05 |
-|    4 |            Eigen::SimplicialLDLT |      9.7 secs |     0.42 secs | 4.80425e-05 |
-|    5 |             Eigen::SimplicialLLT |      9.7 secs |     0.44 secs | 2.60041e-05 |
-|    6 |              catamari::SparseLDL |       11 secs |     0.42 secs | 3.05382e-05 |
-|    7 |   Eigen::BiCGSTAB\<IncompleteLUT\> |       11 secs |      4.8 secs | 5.56194e-05 |
-|    8 |         Eigen::CG\<IncompleteLUT\> |       11 secs |      6.5 secs | 4.73183e-05 |
-|    9 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       20 secs | 3.40111e-05 |
-|   10 |                  Eigen::SparseLU |       36 secs |     0.72 secs | 2.46911e-05 |
-|   11 |      Eigen::CholmodSupernodalLLT |       59 secs |       10 secs | 9.99686e-05 |
-|   12 |                 Eigen::UmfPackLU |  2.5e+02 secs |      2.4 secs | 8.19072e-05 |
+| 🥇 1 |      Eigen::CholmodSupernodalLLT |      2.2 secs |     0.26 secs | 9.99686e-05 |
+| 🥈 2 |                     NVIDIA cuDSS |        4 secs |    0.008 secs | 0.000142766 |
+| 🥉 3 |                        NASOQ LBL |      5.3 secs |     0.29 secs | 0.000148578 |
+|    4 |                Eigen::PardisoLLT |      4.9 secs |      1.1 secs | 6.93083e-05 |
+|    5 |               Eigen::PardisoLDLT |        5 secs |        1 secs | 4.78335e-05 |
+|    6 |                 Eigen::UmfPackLU |      5.4 secs |      1.9 secs | 8.19072e-05 |
+|    7 |             Eigen::SimplicialLLT |      9.1 secs |     0.39 secs | 2.60041e-05 |
+|    8 |            Eigen::SimplicialLDLT |      9.1 secs |      0.4 secs | 4.80425e-05 |
+|    9 |              catamari::SparseLDL |       11 secs |     0.43 secs | 3.05382e-05 |
+|   10 |   Eigen::BiCGSTAB\<IncompleteLUT\> |       11 secs |      4.5 secs | 5.56194e-05 |
+|   11 |         Eigen::CG\<IncompleteLUT\> |       11 secs |      6.3 secs | 4.73183e-05 |
+|   12 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       20 secs | 3.40111e-05 |
+|   13 |                  Eigen::SparseLU |       35 secs |     0.66 secs | 2.46911e-05 |
 
 # Triharmonic
 
 | Rank |                          Method |      Factor |       Solve |     L∞ norm |
 |-----:|--------------------------------:|------------:|------------:|------------:|
-| 🥇 1 |                     NVIDIA cuDSS |      6.5 secs |   0.0054 secs |     24.2444 |
-| 🥈 2 |                Eigen::PardisoLLT |      8.5 secs |      1.3 secs |       10.86 |
-| 🥉 3 |               Eigen::PardisoLDLT |      9.2 secs |      1.3 secs |     23.1328 |
-|    4 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       36 secs |     38.1472 |
-|    5 |            Eigen::SimplicialLDLT |       41 secs |     0.97 secs |     93.8209 |
-|    6 |             Eigen::SimplicialLLT |       41 secs |        1 secs |     39.0697 |
-|    7 |   Eigen::BiCGSTAB\<IncompleteLUT\> |       41 secs |      1.5 secs |         nan |
-|    8 |              catamari::SparseLDL |       45 secs |     0.91 secs |     25.3056 |
-|    9 |      Eigen::CholmodSupernodalLLT |       93 secs |       12 secs |     46.7459 |
-|   10 |                  Eigen::SparseLU |  1.5e+02 secs |      1.8 secs |     37.5559 |
-|   11 |         Eigen::CG\<IncompleteLUT\> |       41 secs |  1.4e+02 secs |         nan |
-|   12 |                 Eigen::UmfPackLU |  3.4e+02 secs |  3.1e-06 secs |     46.7459 |
+| 🥇 1 |                     NVIDIA cuDSS |      6.5 secs |   0.0054 secs |     31.6823 |
+| 🥈 2 |      Eigen::CholmodSupernodalLLT |      9.5 secs |     0.32 secs |     6.77554 |
+| 🥉 3 |                Eigen::PardisoLLT |      9.3 secs |      1.1 secs |       10.86 |
+|    4 |               Eigen::PardisoLDLT |      9.4 secs |      1.7 secs |     23.1328 |
+|    5 |                        NASOQ LBL |       11 secs |     0.45 secs |      61.402 |
+|    6 |                 Eigen::UmfPackLU |       14 secs |  4.8e-07 secs |     6.77554 |
+|    7 |            Eigen::SimplicialLDLT |       36 secs |     0.86 secs |     93.8209 |
+|    8 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       37 secs |     38.1472 |
+|    9 |             Eigen::SimplicialLLT |       36 secs |     0.92 secs |     39.0697 |
+|   10 |   Eigen::BiCGSTAB\<IncompleteLUT\> |       41 secs |      1.6 secs |         nan |
+|   11 |              catamari::SparseLDL |       45 secs |     0.95 secs |     25.3056 |
+|   12 |                  Eigen::SparseLU |  1.5e+02 secs |      1.9 secs |     37.5559 |
+|   13 |         Eigen::CG\<IncompleteLUT\> |       41 secs |  1.5e+02 secs |         nan |
 
 # Mixed Biharmonic (unflattened, indefinite)
 
 | Rank |                          Method |      Factor |       Solve |     L∞ norm |
 |-----:|--------------------------------:|------------:|------------:|------------:|
-| 🥇 1 |                     NVIDIA cuDSS |      5.5 secs |   0.0038 secs | 2.81664e-05 |
-| 🥈 2 |               Eigen::PardisoLDLT |      6.5 secs |      2.3 secs | 5.45176e-11 |
-| 🥉 3 |            Eigen::SimplicialLDLT |      9.6 secs |     0.48 secs | 6.46751e-05 |
-|    4 |     catamari::SparseLDL (LDLᵀ) |       12 secs |     0.42 secs | 8.34264e-05 |
-|    5 |                  Eigen::SparseLU |       32 secs |     0.74 secs | 1.09842e-10 |
-|    6 |         Eigen::CG\<IncompleteLUT\> |      8.3 secs |       50 secs | 3.27831e+06 |
-|    7 |   Eigen::BiCGSTAB\<IncompleteLUT\> |      8.4 secs |       90 secs | 9.73973e-09 |
-|    8 |                 Eigen::UmfPackLU |    3e+02 secs |      2.7 secs |  8.0989e-11 |
+| 🥇 1 |                     NVIDIA cuDSS |      5.4 secs |   0.0038 secs | 4.32598e-05 |
+| 🥈 2 |                        NASOQ LBL |        7 secs |     0.49 secs | 1.68701e-05 |
+| 🥉 3 |            Eigen::SimplicialLDLT |      9.4 secs |     0.45 secs | 6.46751e-05 |
+|    4 |                 Eigen::UmfPackLU |       11 secs |      2.2 secs |  8.0989e-11 |
+|    5 |               Eigen::PardisoLDLT |        7 secs |      6.8 secs | 5.45176e-11 |
+|    6 |         Eigen::CG\<IncompleteLUT\> |      8.5 secs |       49 secs | 3.27831e+06 |
+|    7 |     catamari::SparseLDL (LDLᵀ) |  1.3e+02 secs |      0.5 secs | 8.34264e-05 |
+|    8 |                  Eigen::SparseLU |  1.5e+02 secs |     0.82 secs | 1.09842e-10 |
+|    9 |   Eigen::BiCGSTAB\<IncompleteLUT\> |      8.2 secs |  1.7e+02 secs | 9.73973e-09 |
 |    - |        NVIDIA cuSOLVER (Sp Chol) |           - |           - | skipped: no indefinite/LDLT solver in this cuSOLVER version |
-|    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed (not SPD, as expected) |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed (not SPD, as expected) |
+|    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed (not SPD, as expected) |
 |    - |                Eigen::PardisoLLT |           - |           - | skipped: factorization failed (not SPD, as expected) |
 
 # Mixed Triharmonic (unflattened, indefinite)
 
 | Rank |                          Method |      Factor |       Solve |     L∞ norm |
 |-----:|--------------------------------:|------------:|------------:|------------:|
-| 🥇 1 |                     NVIDIA cuDSS |      9.3 secs |   0.0067 secs |     81430.7 |
+| 🥇 1 |                     NVIDIA cuDSS |      9.3 secs |   0.0068 secs |     28903.4 |
 | 🥈 2 |     catamari::SparseLDL (LDLᵀ) |       46 secs |      1.1 secs | 2.88158e-06 |
-| 🥉 3 |                  Eigen::SparseLU |  1.1e+02 secs |      2.5 secs | 1.00706e-10 |
+| 🥉 3 |                  Eigen::SparseLU |  1.1e+02 secs |      1.6 secs | 1.00706e-10 |
 |    4 |         Eigen::CG\<IncompleteLUT\> |  6.2e+02 secs |       97 secs |     1735.27 |
-|    5 |   Eigen::BiCGSTAB\<IncompleteLUT\> |  6.2e+02 secs |  1.8e+02 secs |      130.92 |
+|    5 |   Eigen::BiCGSTAB\<IncompleteLUT\> |  6.1e+02 secs |  1.9e+02 secs |      130.92 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: known crash risk (see ⚠️ above) |
 |    - |            Eigen::SimplicialLDLT |           - |           - | skipped: known crash (see ⚠️ above) |
+|    - |                        NASOQ LBL |           - |           - | skipped: known crash (see ⚠️ above) |
 |    - |                Eigen::PardisoLLT |           - |           - | skipped: known hang (see ⚠️ above) |
 |    - |               Eigen::PardisoLDLT |           - |           - | skipped: known hang (see ⚠️ above) |
 |    - |        NVIDIA cuSOLVER (Sp Chol) |           - |           - | skipped: no indefinite/LDLT solver in this cuSOLVER version |

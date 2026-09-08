@@ -24,10 +24,12 @@
 #include <cusparse.h>
 #endif
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -72,6 +74,36 @@ static bool g_check_mode = false;
 // Triharmonic systems (tolerances tuned empirically, see verification notes).
 static double g_check_tol[6] = {0, 1e-4, 1e-1, 1e3, 1e-1, 1};
 static bool g_check_failed = false;
+
+// --only/--exclude: case-insensitive substring filters on solver name, so
+// e.g. `--only nasoq` runs just NASOQ LBL, or `--exclude umfpack,sparselu`
+// skips the two slowest general-purpose solvers. Checked at the top of every
+// solve_*()/solve<>() entry point below, before any work is done — a
+// filtered-out solver doesn't even appear in the leaderboard (it's not
+// "skipped", it's simply not run), so this is for fast local iteration on
+// one solver at a time (e.g. while debugging), not for permanent leaderboard
+// output.
+static std::vector<std::string> g_only;
+static std::vector<std::string> g_exclude;
+
+static std::string to_lower(std::string s)
+{
+  for(char & c : s) c = (char)std::tolower((unsigned char)c);
+  return s;
+}
+
+static bool should_run(const std::string & name)
+{
+  const std::string lname = to_lower(name);
+  if(!g_only.empty())
+  {
+    bool found = false;
+    for(const auto & pat : g_only) if(lname.find(pat) != std::string::npos) { found = true; break; }
+    if(!found) return false;
+  }
+  for(const auto & pat : g_exclude) if(lname.find(pat) != std::string::npos) return false;
+  return true;
+}
 
 static void record(
   int k,
@@ -134,6 +166,7 @@ void solve(
   const Eigen::MatrixXd & rhs,
   Eigen::MatrixXd & U)
 {
+  if(!should_run(name)) return;
   Timer timer;
   Factor factor;
   cap_iterations(factor, 0);
@@ -166,6 +199,7 @@ void solve<catamari::SparseLDL<double>>(
   const Eigen::MatrixXd & rhs,
   Eigen::MatrixXd & U)
 {
+  if(!should_run(name)) return;
   catamari::CoordinateMatrix<double> matrix;
   matrix.Resize(Q.rows(), Q.cols());
   matrix.ReserveEntryAdditions(Q.nonZeros());
@@ -301,6 +335,7 @@ void solve_cudss(
   Eigen::MatrixXd & U,
   cudssMatrixType_t mtype = CUDSS_MTYPE_SPD)
 {
+  if(!should_run(name)) return;
   if(!cuda_device_available())
   {
     record(k, name, 0, 0, 0, true, "no CUDA device");
@@ -386,6 +421,7 @@ void solve_cusolver(
   const Eigen::MatrixXd & rhs,
   Eigen::MatrixXd & U)
 {
+  if(!should_run(name)) return;
   if(!cuda_device_available())
   {
     record(k, name, 0, 0, 0, true, "no CUDA device");
@@ -501,6 +537,7 @@ void solve_catamari_ldl(
   const Eigen::MatrixXd & rhs,
   Eigen::MatrixXd & U)
 {
+  if(!should_run(name)) return;
   catamari::CoordinateMatrix<double> matrix;
   matrix.Resize(Q.rows(), Q.cols());
   matrix.ReserveEntryAdditions(Q.nonZeros());
@@ -551,6 +588,96 @@ void solve_catamari_ldl(
   }
   record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff());
 }
+
+#ifdef IGL_WITH_NASOQ
+#include <nasoq/lbl_eigen.h>
+
+// NASOQ's LBL: a parallel sparse symmetric-indefinite (Bunch-Kaufman-style,
+// dynamically regularized) direct solver built for QP KKT systems — a
+// natural fit for testing on our own indefinite mixed-FEM systems (its
+// diagonal regularization is exactly the kind of mechanism that might let it
+// succeed where Pardiso's reordering hangs on the mixed triharmonic system's
+// all-zero-diagonal block; run on all 5 systems to see, same as PardisoLDLT).
+// Uses nasoq::SolverSettings directly (rather than the fused linear_solve()
+// convenience wrapper) for separate factor/solve timing; solves one RHS
+// column at a time (no native multi-RHS API).
+void solve_nasoq_lbl(
+  const std::string & name,
+  int k,
+  const Eigen::SparseMatrix<double> & Q,
+  const Eigen::MatrixXd & rhs,
+  Eigen::MatrixXd & U)
+{
+  if(!should_run(name)) return;
+  const int n = (int)Q.rows();
+  const int nrhs = (int)rhs.cols();
+  // NASOQ wants the lower triangle only (Q is symmetric).
+  Eigen::SparseMatrix<double> QL = Q.triangularView<Eigen::Lower>();
+  QL.makeCompressed();
+
+  nasoq::CSC A;
+  A.nzmax = QL.nonZeros();
+  A.ncol = A.nrow = n;
+  A.p = QL.outerIndexPtr();
+  A.i = QL.innerIndexPtr();
+  A.x = QL.valuePtr();
+  A.stype = -1;
+  A.xtype = CHOLMOD_REAL;
+  A.packed = TRUE;
+  A.nz = NULL;
+  A.sorted = TRUE;
+
+  Eigen::VectorXd rhs0 = rhs.col(0);
+  nasoq::SolverSettings solver(&A, rhs0.data());
+  solver.ldl_variant = 4;
+  solver.solver_mode = 0;
+  solver.reg_diag = std::pow(10, -9);
+  // SolverSettings' own num_thread field (used for MKL's SET_BLAS_THREAD and
+  // workspace sizing) does NOT control the OpenMP team size of its actual
+  // triangular-solve kernels: H2LeveledBlockedLsolve/LTsolve use a bare
+  // "#pragma omp parallel" with no num_threads() clause, and NASOQ's only
+  // omp_set_num_threads() call site (Parallel_simplicial_ldl.cpp) is
+  // commented out. So every solve_only() call was spinning up
+  // omp_get_max_threads() (128 here) OpenMP threads regardless of this
+  // field — the real explanation (verified with gdb + source inspection,
+  // not just the req_ref_iter fix below) for a multi-second "solve" on
+  // problems from 400 rows to 1.4M rows alike: thread-team creation cost on
+  // this shared machine, not real triangular-solve work. Cap it ourselves.
+  solver.num_thread = 1;
+  // The NASOQ eigen_interface example sets req_ref_iter=2, requesting
+  // internal GMRES-based iterative refinement (pmgmres_ldlt_auto) after the
+  // direct solve. Verified with gdb that this was a second, independent
+  // cost: each GMRES iteration issues its own pair of OpenMP-parallel
+  // triangular solves. Leave refinement off; our own downstream residual
+  // check already validates accuracy, same as every other solver here.
+  solver.req_ref_iter = 0;
+
+#ifdef _OPENMP
+  const int prev_omp_threads = omp_get_max_threads();
+  omp_set_num_threads(1);
+#endif
+
+  Timer timer;
+  solver.symbolic_analysis();
+  solver.numerical_factorization();
+  const double t_factor = timer.toc();
+
+  U.resize(n, nrhs);
+  for(int c = 0; c < nrhs; c++)
+  {
+    Eigen::VectorXd rc = rhs.col(c);
+    double * sol = solver.solve_only(n, rc.data());
+    U.col(c) = Eigen::Map<Eigen::VectorXd>(sol, n);
+  }
+  const double t_solve = timer.toc();
+
+#ifdef _OPENMP
+  omp_set_num_threads(prev_omp_threads);
+#endif
+
+  record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff());
+}
+#endif
 
 static std::string machine_info()
 {
@@ -627,6 +754,20 @@ static void print_leaderboard(int k)
   printf("\n");
 }
 
+// Splits a comma-separated list into lowercased tokens (matching should_run's
+// case-insensitive comparison), for --only/--exclude parsing.
+static std::vector<std::string> split_lower_csv(const std::string & s)
+{
+  std::vector<std::string> out;
+  std::stringstream ss(s);
+  std::string tok;
+  while(std::getline(ss, tok, ','))
+  {
+    if(!tok.empty()) out.push_back(to_lower(tok));
+  }
+  return out;
+}
+
 int main(int argc, char * argv[])
 {
   setbuf(stdout, NULL);
@@ -639,11 +780,30 @@ int main(int argc, char * argv[])
     if(arg == "--csv" && i+1<argc) { csv_path = argv[++i]; }
     else if(arg == "--check") { g_check_mode = true; }
     else if(arg == "--grid" && i+1<argc) { grid_n = std::atoi(argv[++i]); }
+    else if(arg == "--only" && i+1<argc)
+    {
+      const auto toks = split_lower_csv(argv[++i]);
+      g_only.insert(g_only.end(), toks.begin(), toks.end());
+    }
+    else if(arg == "--exclude" && i+1<argc)
+    {
+      const auto toks = split_lower_csv(argv[++i]);
+      g_exclude.insert(g_exclude.end(), toks.begin(), toks.end());
+    }
     else { mesh_path = arg; }
   }
   if(mesh_path.empty() && grid_n<=0)
   {
-    fprintf(stderr,"usage: %s [--csv results.csv] [--check] (<mesh> | --grid N)\n",argv[0]);
+    fprintf(stderr,
+      "usage: %s [--csv results.csv] [--check] [--only name[,name...]] "
+      "[--exclude name[,name...]] (<mesh> | --grid N)\n"
+      "  --only/--exclude match case-insensitively against a substring of\n"
+      "  the solver's printed name (e.g. --only nasoq, --exclude umfpack,sparselu).\n"
+      "  Repeatable/comma-separated; --only takes precedence, --exclude is\n"
+      "  applied on top of it. Filtered-out solvers are simply not run (not\n"
+      "  shown as skipped) -- for fast local iteration on one solver, not\n"
+      "  for permanent leaderboard output.\n",
+      argv[0]);
     return 1;
   }
   if(!csv_path.empty())
@@ -709,7 +869,6 @@ int main(int argc, char * argv[])
     {
       build_mixed_system(k==4 ? 2 : 3,L,M,V,Q,rhs);
     }
-
     Eigen::MatrixXd U;
 #ifdef IGL_WITH_CHOLMOD
     solve<Eigen::CholmodSupernodalLLT<Eigen::SparseMatrix<double>>>("Eigen::CholmodSupernodalLLT",k,Q,rhs,U);
@@ -754,6 +913,29 @@ int main(int argc, char * argv[])
     {
       solve<catamari::SparseLDL<double>>("catamari::SparseLDL",k,Q,rhs,U);
     }
+#ifdef IGL_WITH_NASOQ
+    if(k == 5)
+    {
+      // Re-verified after fixing the OpenMP thread-storm bug (this crash
+      // predates that fix, so it was worth re-checking): still reproduces.
+      // Root cause identified via gdb: SIGSEGV inside libmetis.so.5's
+      // minimum-degree ordering (genmmd/mmdelm), called from NASOQ's own
+      // symbolic_analysis_lin_solve(). Reproduces (intermittently --
+      // memory-layout dependent, consistent with an out-of-bounds write)
+      // even on a tiny synthetic --grid 20 mixed triharmonic system
+      // (~1200 rows), i.e. this is inherent to the system's structure
+      // (the lambda block's structurally-zero diagonal, shared with the
+      // Pardiso reordering hang above) rather than a scale issue. Skip
+      // rather than risk it; see the upstream NASOQ issue for the reduced
+      // repro and backtrace.
+      record(k, "NASOQ LBL", 0, 0, 0, true,
+        "known crash: SIGSEGV in libmetis genmmd/mmdelm via NASOQ's symbolic_analysis_lin_solve on this system's sparsity pattern");
+    }
+    else
+    {
+      solve_nasoq_lbl("NASOQ LBL",k,Q,rhs,U);
+    }
+#endif
 #ifdef IGL_WITH_MKL
     if(k == 5)
     {

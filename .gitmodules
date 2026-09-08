@@ -13,3 +13,6 @@
 [submodule "libigl"]
 	path = libigl
 	url = https://github.com/libigl/libigl
+[submodule "nasoq"]
+	path = nasoq
+	url = https://github.com/sympiler/nasoq.git

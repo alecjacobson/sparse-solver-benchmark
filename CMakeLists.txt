@@ -5,6 +5,7 @@ option(IGL_WITH_CHOLMOD   "Use Cholmod" ON)
 option(IGL_WITH_MKL       "Use Intel MKL" ON)
 option(IGL_WITH_GPL       "Use GPL features in Eigen" ON)
 option(IGL_WITH_CUDSS     "Use NVIDIA cuDSS/cuSOLVER (requires the CUDA toolkit)" ON)
+option(IGL_WITH_NASOQ     "Use NASOQ's LBL (parallel symmetric-indefinite) solver" ON)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
@@ -121,6 +122,30 @@ if(IGL_WITH_CUDSS)
   else()
     message(WARNING "No CUDA compiler found; disabling GPU solvers (IGL_WITH_CUDSS).")
     set(IGL_WITH_CUDSS OFF)
+  endif()
+endif()
+
+if(IGL_WITH_NASOQ)
+  if(IGL_WITH_MKL)
+    # NASOQ's own cmake/FindMKL.cmake has the same missing-header-search-hint
+    # bug our original cmake/FindMKL.cmake had (FIND_PATH with no HINTS, so
+    # it never looks in /usr/include/mkl); pre-seed the cache var so its
+    # find_path is a no-op instead of failing.
+    set(MKL_INCLUDE_DIR /usr/include/mkl CACHE PATH "")
+    set(NASOQ_BLAS_BACKEND MKL CACHE STRING "")
+    set(NASOQ_BUILD_CLI OFF CACHE BOOL "")
+    set(NASOQ_BUILD_EXAMPLES OFF CACHE BOOL "")
+    set(NASOQ_BUILD_TESTS OFF CACHE BOOL "")
+    set(NASOQ_BUILD_DOCS OFF CACHE BOOL "")
+    set(NASOQ_WITH_EIGEN ON CACHE BOOL "")
+    set(NASOQ_WITH_MATLAB OFF CACHE BOOL "")
+    set(NASOQ_USE_CLAPACK OFF CACHE BOOL "")
+    add_subdirectory(nasoq)
+    target_compile_definitions(${PROJECT_NAME} PUBLIC -DIGL_WITH_NASOQ)
+    target_link_libraries(${PROJECT_NAME} nasoq::eigen_interface)
+  else()
+    message(WARNING "NASOQ LBL requires IGL_WITH_MKL for its BLAS backend; disabling.")
+    set(IGL_WITH_NASOQ OFF)
   endif()
 endif()
 
