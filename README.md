@@ -169,6 +169,17 @@ debugging a specific solver against the full dragon mesh, without waiting
 for `SparseLU`/`CG`/etc. to grind through every k), not for the leaderboard
 tables below, which always run every solver.
 
+    ./sparse_solver_benchmark mesh.ply --dump-matrices /tmp/dump --dump-only
+
+`--dump-matrices dir` writes each system's `Q`/`rhs` as plain
+[MatrixMarket](https://math.nist.gov/MatrixMarket/formats.html) files
+(`k<k>_Q.mtx`, `k<k>_rhs.mtx`) instead of (or alongside, without
+`--dump-only`) running this benchmark's own solvers -- see
+[`warp_bench/`](warp_bench/) for a Python add-on that loads these to time
+[NVIDIA Warp](https://github.com/NVIDIA/warp)'s `warp.optim.linear` iterative
+solvers (`cg`/`cr`/`bicgstab`/`gmres`), a comparison that doesn't fit into
+this project's C++/Eigen-based solver interface.
+
 ## Testing
 
     ctest --test-dir build --output-on-failure

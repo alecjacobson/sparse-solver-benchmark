@@ -17,6 +17,7 @@
 #endif
 #include <Eigen/CholmodSupport>
 #include <Eigen/UmfPackSupport>
+#include <unsupported/Eigen/SparseExtra>
 #ifdef IGL_WITH_CUDSS
 #include <cuda_runtime_api.h>
 #include <cudss.h>
@@ -28,7 +29,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -679,6 +682,42 @@ void solve_nasoq_lbl(
 }
 #endif
 
+// Writes a dense Eigen matrix in MatrixMarket "array" format (column-major,
+// one value per line) -- Eigen's own unsupported/Eigen/SparseExtra only
+// provides saveMarket() for sparse matrices and saveMarketVector() for a
+// single vector, neither of which covers a dense multi-column RHS.
+static bool write_dense_market(const Eigen::MatrixXd & mat, const std::string & filename)
+{
+  std::ofstream out(filename);
+  if(!out.is_open()) return false;
+  out << "%%MatrixMarket matrix array real general\n";
+  out << mat.rows() << " " << mat.cols() << "\n";
+  out << std::setprecision(17);
+  for(int c=0;c<mat.cols();c++)
+  {
+    for(int r=0;r<mat.rows();r++)
+    {
+      out << mat(r,c) << "\n";
+    }
+  }
+  return true;
+}
+
+// Dumps Q (full, not just lower triangular -- unlike NASOQ's CSC input,
+// external readers like scipy/warp expect the whole symmetric matrix) and
+// rhs for one k to <dir>/k<k>_Q.mtx and <dir>/k<k>_rhs.mtx, both in the
+// standard MatrixMarket format so any external tool (scipy, warp, MATLAB,
+// ...) can load them without depending on this benchmark's own code --
+// see --dump-matrices in main() and warp_bench/ for the Python-side
+// consumer that times NVIDIA Warp's warp.optim.linear solvers on them.
+static void dump_matrices(
+  const std::string & dir, int k,
+  const Eigen::SparseMatrix<double> & Q, const Eigen::MatrixXd & rhs)
+{
+  Eigen::saveMarket(Q, dir + "/k" + std::to_string(k) + "_Q.mtx");
+  write_dense_market(rhs, dir + "/k" + std::to_string(k) + "_rhs.mtx");
+}
+
 static std::string machine_info()
 {
   std::string info;
@@ -773,6 +812,8 @@ int main(int argc, char * argv[])
   setbuf(stdout, NULL);
   std::string mesh_path;
   std::string csv_path;
+  std::string dump_dir;
+  bool dump_only = false;
   int grid_n = 0;
   for(int i=1;i<argc;i++)
   {
@@ -790,21 +831,33 @@ int main(int argc, char * argv[])
       const auto toks = split_lower_csv(argv[++i]);
       g_exclude.insert(g_exclude.end(), toks.begin(), toks.end());
     }
+    else if(arg == "--dump-matrices" && i+1<argc) { dump_dir = argv[++i]; }
+    else if(arg == "--dump-only") { dump_only = true; }
     else { mesh_path = arg; }
   }
   if(mesh_path.empty() && grid_n<=0)
   {
     fprintf(stderr,
       "usage: %s [--csv results.csv] [--check] [--only name[,name...]] "
-      "[--exclude name[,name...]] (<mesh> | --grid N)\n"
+      "[--exclude name[,name...]] [--dump-matrices dir] [--dump-only] "
+      "(<mesh> | --grid N)\n"
       "  --only/--exclude match case-insensitively against a substring of\n"
       "  the solver's printed name (e.g. --only nasoq, --exclude umfpack,sparselu).\n"
       "  Repeatable/comma-separated; --only takes precedence, --exclude is\n"
       "  applied on top of it. Filtered-out solvers are simply not run (not\n"
       "  shown as skipped) -- for fast local iteration on one solver, not\n"
-      "  for permanent leaderboard output.\n",
+      "  for permanent leaderboard output.\n"
+      "  --dump-matrices dir writes each system's Q/rhs as MatrixMarket files\n"
+      "  (k<k>_Q.mtx, k<k>_rhs.mtx) to dir, for external tools (e.g. warp_bench/)\n"
+      "  to load; combine with --dump-only to skip this benchmark's own solvers\n"
+      "  entirely (just build+dump), or with --only/--exclude to dump alongside\n"
+      "  running a subset.\n",
       argv[0]);
     return 1;
+  }
+  if(!dump_dir.empty())
+  {
+    std::filesystem::create_directories(dump_dir);
   }
   if(!csv_path.empty())
   {
@@ -868,6 +921,14 @@ int main(int argc, char * argv[])
     else
     {
       build_mixed_system(k==4 ? 2 : 3,L,M,V,Q,rhs);
+    }
+    if(!dump_dir.empty())
+    {
+      dump_matrices(dump_dir, k, Q, rhs);
+    }
+    if(dump_only)
+    {
+      continue;
     }
     Eigen::MatrixXd U;
 #ifdef IGL_WITH_CHOLMOD
