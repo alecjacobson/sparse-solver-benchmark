@@ -34,6 +34,7 @@ warp.optim.linear's own docstrings) -- pass --check-every N>0 if you want
 early exit and don't mind the extra host syncs that requires.
 """
 import argparse
+import csv
 import math
 import os
 import time
@@ -77,10 +78,61 @@ def to_warp_matrix(Q, device):
     return wp.sparse.bsr_from_triplets(Q.shape[0], Q.shape[1], rows, cols, vals)
 
 
+# kMaxIterativeIterations (20000) alone turned out to be impractical as the
+# sole backstop on the C++ side -- see main.cpp's kIterativeTimeLimitSeconds
+# comment: on the real dragon mesh, an iterative solver on the badly-scaled
+# flattened triharmonic system was observed (via gdb) to genuinely still be
+# computing after multiple *hours*, nowhere near either the tolerance or the
+# iteration cap. Same fix here: an actual wall-clock deadline, matching the
+# C++ side's value, checked between chunks of a warm-started solve rather
+# than trusting iteration count alone to bound wall time.
+TIME_LIMIT_SECONDS = 600.0  # matches main.cpp's kIterativeTimeLimitSeconds
+
+
+def solve_time_limited(fn, A, b, x, tol, M, check_every, max_total_iters):
+    """Chunked, wall-clock-limited solve mirroring main.cpp's solve_rhs():
+    repeatedly calls fn() with a growing iteration budget, x carrying over
+    as the warm-start guess between chunks (per warp.optim.linear's own
+    docs, x is "initial guess and solution vector"), checking elapsed time
+    between chunks. Returns (timed_out, iterations_used); x is updated
+    in-place with the best-effort result either way."""
+    deadline = time.perf_counter() + TIME_LIMIT_SECONDS
+    chunk = 10
+    iterations_used = 0
+    while True:
+        t0 = time.perf_counter()
+        it, _err_sq, _atol_sq = fn(A, b, x, tol=tol, maxiter=chunk, M=M, check_every=check_every, use_cuda_graph=True)
+        wp.synchronize()
+        chunk_dt = time.perf_counter() - t0
+        iters_this_chunk = int(it.numpy()[0])
+        iterations_used += iters_this_chunk
+        # Device-side early exit (check_every=0, conditional CUDA graphs --
+        # confirmed working on this GPU) means iters_this_chunk < chunk
+        # implies convergence fired before using the whole chunk; using
+        # exactly `chunk` iterations without a separate convergence signal
+        # means it wasn't done yet and needs another chunk.
+        converged = iters_this_chunk < chunk
+        if converged or iterations_used >= max_total_iters:
+            return False, iterations_used
+        now = time.perf_counter()
+        if now >= deadline:
+            return True, iterations_used
+        remaining = max_total_iters - iterations_used
+        # Target ~5s of work, or however much time is actually left before
+        # the deadline if less, so we don't overshoot it by a wide margin
+        # on a slow final chunk.
+        target_secs = min(5.0, deadline - now)
+        if chunk_dt > 1e-6 and iters_this_chunk > 0:
+            per_iter = chunk_dt / iters_this_chunk
+            chunk = max(10, min(remaining, int(target_secs / per_iter)))
+        else:
+            chunk = max(10, min(remaining, chunk * 4))
+
+
 def run_solver(fn, A, Q_scipy, rhs, device, maxiter, tol, check_every):
     """Solves every RHS column separately (warp's solvers take a single b/x
     vector at a time, same constraint NASOQ's solve_only() has on the C++
-    side); returns (t_factor, t_solve, linf_residual).
+    side); returns (t_factor, t_solve, linf_residual, timed_out, iterations_used).
 
     Uses Warp's Jacobi ("diag") preconditioner -- the closest thing Warp
     offers to the Eigen side's IncompleteLUT (Warp has no incomplete-LU
@@ -97,7 +149,7 @@ def run_solver(fn, A, Q_scipy, rhs, device, maxiter, tol, check_every):
     wol.preconditioner(A, "diag")
     b0 = wp.array(rhs[:, 0].copy(), dtype=wp.float64, device=device)
     x0 = wp.zeros(n, dtype=wp.float64, device=device)
-    fn(A, b0, x0, tol=tol, maxiter=maxiter, M=wol.preconditioner(A, "diag"), check_every=check_every, use_cuda_graph=True)
+    fn(A, b0, x0, tol=tol, maxiter=10, M=wol.preconditioner(A, "diag"), check_every=check_every, use_cuda_graph=True)
     wp.synchronize()
 
     t0 = time.perf_counter()
@@ -107,18 +159,21 @@ def run_solver(fn, A, Q_scipy, rhs, device, maxiter, tol, check_every):
 
     U = np.zeros((n, nrhs))
     t_solve = 0.0
+    timed_out = False
+    iterations_used = 0
     for c in range(nrhs):
         b = wp.array(rhs[:, c].copy(), dtype=wp.float64, device=device)
         x = wp.zeros(n, dtype=wp.float64, device=device)
         wp.synchronize()
         t0 = time.perf_counter()
-        fn(A, b, x, tol=tol, maxiter=maxiter, M=M, check_every=check_every, use_cuda_graph=True)
-        wp.synchronize()
+        col_timed_out, col_iters = solve_time_limited(fn, A, b, x, tol, M, check_every, maxiter)
         t_solve += time.perf_counter() - t0
+        timed_out = timed_out or col_timed_out
+        iterations_used += col_iters
         U[:, c] = x.numpy()
 
     residual = float(np.abs(rhs - Q_scipy @ U).max())
-    return t_factor, t_solve, residual
+    return t_factor, t_solve, residual, timed_out, iterations_used
 
 
 # Same reclassification the C++ benchmark applies (see main.cpp's
@@ -141,38 +196,46 @@ DIVERGED_ABSOLUTE_CAP = 1e4
 
 
 def print_leaderboard(rows, reference_residual=None):
+    # rows: list of dicts with name/t_factor/t_solve/residual/timed_out/iterations_used
+    #
     # NaN comparisons are always False in IEEE 754, so `nan <= threshold` and
     # `nan > threshold` are both False -- a NaN residual would silently
     # vanish from both the "ok" and "diverged" lists below (and could also
     # corrupt min() below, which has no defined NaN-skipping behavior)
     # without this explicit filter. Route NaN rows straight to diverged.
-    finite_rows = [r for r in rows if not math.isnan(r[3])]
-    nan_rows = [r for r in rows if math.isnan(r[3])]
+    finite_rows = [r for r in rows if not math.isnan(r["residual"])]
+    nan_rows = [r for r in rows if math.isnan(r["residual"])]
 
-    residuals = [r[3] for r in finite_rows]
+    residuals = [r["residual"] for r in finite_rows]
     candidates = residuals + ([reference_residual] if reference_residual is not None else [])
     min_residual = min(candidates) if candidates else float("inf")
     threshold = min(max(min_residual * DIVERGED_FACTOR, DIVERGED_FLOOR), DIVERGED_ABSOLUTE_CAP)
 
-    ok = [r for r in finite_rows if r[3] <= threshold]
-    diverged = [r for r in finite_rows if r[3] > threshold] + nan_rows
-    ok = sorted(ok, key=lambda r: r[1] + r[2])
+    ok = [r for r in finite_rows if r["residual"] <= threshold]
+    diverged = [r for r in finite_rows if r["residual"] > threshold] + nan_rows
+    ok = sorted(ok, key=lambda r: r["t_factor"] + r["t_solve"])
 
     medals = ["\U0001F947", "\U0001F948", "\U0001F949"]
+    any_timed_out = any(r["timed_out"] for r in ok)
     print("\n| Rank |          Method |      Factor |       Solve |     L∞ norm |")
     print("|-----:|-----------------:|------------:|------------:|------------:|")
-    for i, (name, t_factor, t_solve, residual) in enumerate(ok):
+    for i, r in enumerate(ok):
         rank = medals[i] + f" {i+1}" if i < 3 else f"   {i+1}"
-        print(f"| {rank} | {name:>16} | {t_factor:>9.2g} secs | {t_solve:>9.2g} secs | {residual:>10.6g} |")
-    for name, t_factor, t_solve, residual in diverged:
-        if math.isnan(residual):
+        name = r["name"] + ("†" if r["timed_out"] else "")
+        print(f"| {rank} | {name:>16} | {r['t_factor']:>9.2g} secs | {r['t_solve']:>9.2g} secs | {r['residual']:>10.6g} |")
+    for r in diverged:
+        name = r["name"]
+        if math.isnan(r["residual"]):
             print(f"|    - | {name:>16} |           - |           - | "
                   f"skipped: did not actually succeed: L∞ residual is NaN (solver diverged) |")
             continue
-        ratio = residual / min_residual if min_residual > 0 else float("inf")
+        ratio = r["residual"] / min_residual if min_residual > 0 else float("inf")
         print(f"|    - | {name:>16} |           - |           - | "
-              f"skipped: did not actually succeed: L∞ residual {residual:.4g} "
+              f"skipped: did not actually succeed: L∞ residual {r['residual']:.4g} "
               f"is {ratio:.3g} x the best solver's ({min_residual:.4g}) on this system |")
+    if any_timed_out:
+        print(f"\n† hit the {TIME_LIMIT_SECONDS/60:.0f}-minute iterative-solver time limit before reaching "
+              f"--tol -- residual is a snapshot at cutoff, not a converged result.")
     return diverged
 
 
@@ -189,10 +252,11 @@ def main():
 
     reference = {}
     if args.reference_csv:
-        with open(args.reference_csv) as f:
-            next(f)  # header
-            for line in f:
-                k, method, t_factor, t_solve, residual, skipped, fused = line.strip().split(",")
+        with open(args.reference_csv, newline="") as f:
+            r = csv.reader(f)
+            next(r)  # header: k,method,factor_secs,solve_secs,linf_residual,skipped,fused_factor,timed_out,iterations_used
+            for row in r:
+                k, method, t_factor, t_solve, residual, skipped = row[0], row[1], row[2], row[3], row[4], row[5]
                 if skipped == "0":
                     k = int(k)
                     reference[k] = min(reference.get(k, float("inf")), float(residual))
@@ -203,7 +267,7 @@ def main():
 
     csv_f = open(args.csv, "w") if args.csv else None
     if csv_f:
-        csv_f.write("k,method,factor_secs,solve_secs,linf_residual,skipped,fused_factor\n")
+        csv_f.write("k,method,factor_secs,solve_secs,linf_residual,skipped,fused_factor,timed_out,iterations_used\n")
 
     for k in sorted(SYSTEM_NAMES):
         q_path = os.path.join(args.dir, f"k{k}_Q.mtx")
@@ -215,16 +279,20 @@ def main():
 
         rows = []
         for name, fn in SOLVERS.items():
-            t_factor, t_solve, residual = run_solver(
+            t_factor, t_solve, residual, timed_out, iterations_used = run_solver(
                 fn, A, Q, rhs, device, args.maxiter, args.tol, args.check_every
             )
-            rows.append((name, t_factor, t_solve, residual))
+            rows.append({
+                "name": name, "t_factor": t_factor, "t_solve": t_solve, "residual": residual,
+                "timed_out": timed_out, "iterations_used": iterations_used,
+            })
         diverged = print_leaderboard(rows, reference.get(k))
-        diverged_names = {r[0] for r in diverged}
+        diverged_names = {r["name"] for r in diverged}
         if csv_f:
-            for name, t_factor, t_solve, residual in rows:
-                skipped = 1 if name in diverged_names else 0
-                csv_f.write(f"{k},{name},{t_factor:.9g},{t_solve:.9g},{residual:.9g},{skipped},0\n")
+            for r in rows:
+                skipped = 1 if r["name"] in diverged_names else 0
+                csv_f.write(f"{k},{r['name']},{r['t_factor']:.9g},{r['t_solve']:.9g},{r['residual']:.9g},"
+                             f"{skipped},0,{1 if r['timed_out'] else 0},{r['iterations_used']}\n")
 
     if csv_f:
         csv_f.close()

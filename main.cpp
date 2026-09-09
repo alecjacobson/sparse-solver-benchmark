@@ -67,6 +67,14 @@ struct Result
   // step (e.g. an API that fuses analysis+factor+solve into one call), so
   // the leaderboard can print "(fused)" instead of a misleading "0 secs".
   bool fused_factor = false;
+  // True when an iterative solver hit kIterativeTimeLimitSeconds before
+  // reaching kIterativeTolerance or kMaxIterativeIterations -- the row still
+  // reports its best-effort accuracy at cutoff (not skipped), but the
+  // leaderboard marks it so a fast-but-inaccurate time-limited result isn't
+  // read as a genuinely converged one. iterations_used is -1 for solvers
+  // this doesn't apply to (direct solvers have no iteration count).
+  bool timed_out = false;
+  int iterations_used = -1;
 };
 
 static std::vector<Result> g_results;
@@ -118,13 +126,15 @@ static void record(
   double residual,
   bool skipped = false,
   const std::string & skip_reason = "",
-  bool fused_factor = false)
+  bool fused_factor = false,
+  bool timed_out = false,
+  int iterations_used = -1)
 {
-  g_results.push_back({k, name, t_factor, t_solve, residual, skipped, skip_reason, fused_factor});
+  g_results.push_back({k, name, t_factor, t_solve, residual, skipped, skip_reason, fused_factor, timed_out, iterations_used});
   if(g_csv)
   {
-    fprintf(g_csv,"%d,%s,%.9g,%.9g,%.9g,%d,%d\n",
-      k, name.c_str(), t_factor, t_solve, residual, skipped?1:0, fused_factor?1:0);
+    fprintf(g_csv,"%d,%s,%.9g,%.9g,%.9g,%d,%d,%d,%d\n",
+      k, name.c_str(), t_factor, t_solve, residual, skipped?1:0, fused_factor?1:0, timed_out?1:0, iterations_used);
   }
   if(g_check_mode && !skipped && !(residual <= g_check_tol[k]))
   {
@@ -189,6 +199,84 @@ auto set_tolerance(Factor & factor, int) -> decltype(factor.setTolerance(0.0), v
 template <typename Factor>
 void set_tolerance(Factor &, long) {}
 
+// kMaxIterativeIterations (20000) alone turned out to be impractical as the
+// sole backstop: on the real dragon mesh, Eigen::CG on the badly-scaled
+// flattened triharmonic system was observed (via gdb, confirming it was
+// genuinely still computing, not hung) to run for multiple *hours* without
+// reaching either the tolerance or the iteration cap. A pure iteration cap
+// can't bound wall-clock time when a system is this much harder than
+// smaller test cases suggested. Add an actual wall-clock deadline: for
+// iterative solvers, solve in chunks via solveWithGuess() (continuing from
+// the previous chunk's x, not restarting from zero each time) and check
+// elapsed time between chunks, so a solver that's still short of
+// convergence at the deadline is stopped and reports its best-effort
+// accuracy at that point -- rather than either running unboundedly or
+// being cut off at an arbitrary iteration count with no time guarantee.
+static const double kIterativeTimeLimitSeconds = 600.0; // 10 minutes
+
+// SFINAE dispatch mirrors cap_iterations/set_tolerance: only types with
+// solveWithGuess() (Eigen's iterative solvers) get the chunked/timed path;
+// direct solvers fall through to a single plain solve() call.
+template <typename Factor>
+auto solve_rhs(Factor & factor, const Eigen::MatrixXd & rhs, bool & timed_out, int & iterations_used, int)
+  -> decltype(factor.solveWithGuess(rhs, rhs), Eigen::MatrixXd())
+{
+  timed_out = false;
+  iterations_used = 0;
+  Eigen::MatrixXd x = Eigen::MatrixXd::Zero(rhs.rows(), rhs.cols());
+  const double deadline = igl::get_seconds() + kIterativeTimeLimitSeconds;
+  int chunk = 10;
+  while(true)
+  {
+    factor.setMaxIterations(chunk);
+    const double chunk_t0 = igl::get_seconds();
+    x = factor.solveWithGuess(rhs, x);
+    const double chunk_dt = igl::get_seconds() - chunk_t0;
+    // factor.iterations() is NOT used here: for a multi-column rhs (this
+    // benchmark's rhs is M*V, 3 columns), Eigen's own
+    // IterativeSolverBase::_solve_with_guess_impl loops per-column and
+    // aggregates m_info across columns but never aggregates m_iterations --
+    // verified empirically (and by reading IterativeSolverBase.h) that it
+    // reports 0 after a multi-column solveWithGuess() regardless of what
+    // actually happened, converged or not. Track our own upper-bound
+    // instead: since setMaxIterations(chunk) caps each column's iteration
+    // count, "chunk" itself is what a non-converged call actually spent
+    // (this is an approximation when some columns converge before others,
+    // but the alternative -- trusting iterations(), which was silently
+    // always 0 -- meant this loop's cap-based termination check never
+    // fired at all, so it only ever stopped via the wall-clock deadline).
+    iterations_used += chunk;
+    if(factor.info() == Eigen::Success || iterations_used >= kMaxIterativeIterations) break;
+    const double now = igl::get_seconds();
+    if(now >= deadline) { timed_out = true; break; }
+    // Adapt the next chunk size toward ~5s of work (or however much time is
+    // actually left before the deadline, if less), based on this chunk's
+    // observed per-iteration cost, so we check the deadline reasonably
+    // often without paying excessive per-chunk call overhead on easy
+    // problems (few, tiny chunks) or overshooting the deadline by a wide
+    // margin on hard ones (one huge final chunk).
+    const int remaining = kMaxIterativeIterations - iterations_used;
+    const double target_secs = std::min(5.0, deadline - now);
+    if(chunk_dt > 1e-6)
+    {
+      const double per_iter = chunk_dt / (double)chunk;
+      chunk = std::max(10, std::min(remaining, (int)(target_secs/per_iter)));
+    }
+    else
+    {
+      chunk = std::max(10, std::min(remaining, chunk*4));
+    }
+  }
+  return x;
+}
+template <typename Factor>
+Eigen::MatrixXd solve_rhs(Factor & factor, const Eigen::MatrixXd & rhs, bool & timed_out, int & iterations_used, long)
+{
+  timed_out = false;
+  iterations_used = -1;
+  return factor.solve(rhs);
+}
+
 static const char * eigen_info_string(Eigen::ComputationInfo info)
 {
   switch(info)
@@ -230,9 +318,12 @@ void solve(
       std::string("factorization failed: ") + eigen_info_string(factor.info()));
     return;
   }
-  U = factor.solve(rhs);
+  bool timed_out = false;
+  int iterations_used = -1;
+  U = solve_rhs(factor, rhs, timed_out, iterations_used, 0);
   const double t_solve = timer.toc();
-  record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff());
+  record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff(),
+    false, "", false, timed_out, iterations_used);
 }
 
 template <>
@@ -890,6 +981,7 @@ static void print_leaderboard(int k)
   printf("|-----:|--------------------------------:|------------:|------------:|------------:|\n");
   int rank = 0;
   bool any_fused = false;
+  bool any_timed_out = false;
   for(const auto & r : rows)
   {
     if(r.skipped)
@@ -899,22 +991,38 @@ static void print_leaderboard(int k)
     }
     rank++;
     const char * medal = rank==1 ? "\U0001F947" : rank==2 ? "\U0001F948" : rank==3 ? "\U0001F949" : "  ";
+    // A timed-out row's residual is a snapshot at the kIterativeTimeLimitSeconds
+    // cutoff, not a converged result -- mark it with a dagger (and a
+    // footnote, matching the existing "(fused)*" pattern) rather than let it
+    // read as equivalent to a genuinely converged row's number.
+    std::string display_name = r.name;
+    if(r.timed_out)
+    {
+      any_timed_out = true;
+      display_name += "†";
+    }
     if(r.fused_factor)
     {
       any_fused = true;
       printf("| %s%2d | %32s |     (fused)* | %8.2g secs | %11.6g |\n",
-        medal,rank,r.name.c_str(),r.t_solve,r.residual);
+        medal,rank,display_name.c_str(),r.t_solve,r.residual);
     }
     else
     {
       printf("| %s%2d | %32s | %8.2g secs | %8.2g secs | %11.6g |\n",
-        medal,rank,r.name.c_str(),r.t_factor,r.t_solve,r.residual);
+        medal,rank,display_name.c_str(),r.t_factor,r.t_solve,r.residual);
     }
   }
   if(any_fused)
   {
     printf("\n*(fused): this solver's API has no separate factor step; the whole\n");
     printf(" analysis+factor+solve cost is reported under Solve instead.\n");
+  }
+  if(any_timed_out)
+  {
+    printf("\n\xe2\x80\xa0 hit the %.0f-minute iterative-solver time limit before reaching\n",
+      kIterativeTimeLimitSeconds/60.0);
+    printf(" kIterativeTolerance -- residual is a snapshot at cutoff, not a converged result.\n");
   }
   printf("\n");
 }
@@ -988,7 +1096,7 @@ int main(int argc, char * argv[])
   if(!csv_path.empty())
   {
     g_csv = fopen(csv_path.c_str(),"w");
-    fprintf(g_csv,"k,method,factor_secs,solve_secs,linf_residual,skipped,fused_factor\n");
+    fprintf(g_csv,"k,method,factor_secs,solve_secs,linf_residual,skipped,fused_factor,timed_out,iterations_used\n");
   }
 
   fprintf(stderr,"# %s\n",machine_info().c_str());
