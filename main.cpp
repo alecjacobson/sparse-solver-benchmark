@@ -142,10 +142,24 @@ static void record(
 // intended stopping criterion -- that's kIterativeTolerance below (see
 // set_tolerance()); this just bounds worst-case runtime on a system that
 // never converges (e.g. CG on a genuinely indefinite input, which it isn't
-// designed to handle) instead of letting it hang. SFINAE dispatch: direct
-// solvers (LLT/LDLT/LU/...) have no setMaxIterations, so the fallback (long)
-// overload is selected for them and does nothing.
-static const int kMaxIterativeIterations = 200;
+// designed to handle) instead of letting it hang.
+//
+// This used to be 200, which in practice made the iteration cap the real
+// stopping criterion for anything but the smallest/best-conditioned
+// systems -- kIterativeTolerance was set but rarely actually reached before
+// hitting the cap, so different solvers ended up compared at different,
+// incidental accuracies rather than the uniform target tolerance. Raised
+// deliberately high so a solver that CAN reach kIterativeTolerance
+// (whatever that takes) actually does, at the cost of longer runs on
+// systems that still can't converge even given a very generous budget
+// (e.g. CG on indefinite input) -- this remains only a backstop against
+// those never terminating, not a limit expected to bind on well-behaved
+// systems.
+//
+// SFINAE dispatch: direct solvers (LLT/LDLT/LU/...) have no
+// setMaxIterations, so the fallback (long) overload is selected for them
+// and does nothing.
+static const int kMaxIterativeIterations = 20000;
 template <typename Factor>
 auto cap_iterations(Factor & factor, int) -> decltype(factor.setMaxIterations(0), void())
 {
@@ -832,24 +846,36 @@ static void print_leaderboard(int k)
   std::vector<Result> rows;
   for(const auto & r : g_results) if(r.k==k) rows.push_back(r);
 
+  // NaN comparisons are always false (IEEE 754), so `nan > threshold` and
+  // `nan < min_residual` both silently evaluate to false rather than
+  // flagging a diverged solve -- without an explicit isnan() check here, a
+  // solver that returned NaN (e.g. Eigen::CG genuinely diverging on an
+  // indefinite system) would slip through this whole reclassification
+  // untouched and could even rank #1, having accidentally never lost a `<`
+  // comparison to anything. Exclude NaN from the "best" computation and
+  // unconditionally treat it as a failure below, no threshold needed.
   double min_residual = std::numeric_limits<double>::infinity();
-  for(const auto & r : rows) if(!r.skipped) min_residual = std::min(min_residual, r.residual);
-  if(std::isfinite(min_residual))
+  for(const auto & r : rows) if(!r.skipped && !std::isnan(r.residual)) min_residual = std::min(min_residual, r.residual);
+  const bool have_reference = std::isfinite(min_residual);
+  const double threshold = have_reference
+    ? std::min(std::max(min_residual*kDivergedFactor, kDivergedFloor), kDivergedAbsoluteCap)
+    : 0.0;
+  for(auto & r : rows)
   {
-    const double threshold = std::min(
-      std::max(min_residual*kDivergedFactor, kDivergedFloor),
-      kDivergedAbsoluteCap);
-    for(auto & r : rows)
+    if(r.skipped) continue;
+    if(std::isnan(r.residual))
     {
-      if(!r.skipped && r.residual > threshold)
-      {
-        char buf[256];
-        snprintf(buf,sizeof(buf),
-          "did not actually succeed: L%s residual %.4g is %.3g x the best solver's (%.4g) on this system",
-          "∞",r.residual,r.residual/min_residual,min_residual);
-        r.skipped = true;
-        r.skip_reason = buf;
-      }
+      r.skipped = true;
+      r.skip_reason = "did not actually succeed: L∞ residual is NaN (solver diverged)";
+    }
+    else if(have_reference && r.residual > threshold)
+    {
+      char buf[256];
+      snprintf(buf,sizeof(buf),
+        "did not actually succeed: L%s residual %.4g is %.3g x the best solver's (%.4g) on this system",
+        "∞",r.residual,r.residual/min_residual,min_residual);
+      r.skipped = true;
+      r.skip_reason = buf;
     }
   }
 

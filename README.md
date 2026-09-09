@@ -44,12 +44,12 @@ solvers can't handle at all, and a couple can't even handle *gracefully* (see
 >   unreliable as k grows and are unreliable on indefinite systems (CG in
 >   particular, since it assumes SPD). They now stop at a **relative L2
 >   residual tolerance of 1e-7** (`‖b−Ax‖₂ < 1e-7·‖b‖₂`, via `setTolerance()`)
->   — the actual intended stopping criterion — with a 200-iteration cap
->   remaining only as a safety net against a system that never converges at
->   all, not as the thing doing the deciding on systems that do. `warp_bench/`
->   uses the identical relative-L2 formula at the same `1e-7`, verified by
->   reading both libraries' source, so a comparison between them is
->   apples-to-apples.
+>   — the actual intended stopping criterion — with a deliberately generous
+>   20000-iteration cap remaining only as a safety net against a system that
+>   never converges at all (e.g. CG on indefinite input), not as the thing
+>   doing the deciding on systems that do. `warp_bench/` uses the identical
+>   relative-L2 formula at the same `1e-7`, verified by reading both
+>   libraries' source, so a comparison between them is apples-to-apples.
 > - **Eigen SparseLU**¹ is the slowest general-purpose solver by a wide
 >   margin, as expected — but see the ⚠️ note below if you see it apparently
 >   taking *minutes* instead of seconds, that's a build misconfiguration, not
@@ -58,7 +58,7 @@ solvers can't handle at all, and a couple can't even handle *gracefully* (see
 >   `gmres`, timed separately via [`warp_bench/`](warp_bench/)) run to the
 >   same `1e-7` relative tolerance as Eigen's iterative solvers, but with
 >   only Jacobi preconditioning (the strongest Warp currently offers — Eigen
->   uses incomplete-LU, meaningfully stronger) and the same 200-iteration
+>   uses incomplete-LU, meaningfully stronger) and the same 20000-iteration
 >   safety-net cap. At this mesh's real scale (360K-2.16M rows), that
 >   combination usually isn't enough to actually converge, so most `warp::*`
 >   rows are correctly caught by the did-not-actually-succeed check (see
@@ -250,7 +250,10 @@ Running
     ./sparse_solver_benchmark ../xyzrgb_dragon-720K.ply
 
 on an NVIDIA L40 / dual Intel Xeon Platinum 8362 (128 threads) machine
-produces:
+produces (tables below predate `kMaxIterativeIterations` being raised from
+200 to 20000 -- a full rerun at the higher cap is a pending follow-up, since
+it substantially increases total run time; the numbers are still directionally
+correct, but some iterative-solver rows may now converge further/differently):
 
 # Harmonic
 

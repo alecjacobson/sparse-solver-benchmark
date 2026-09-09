@@ -34,6 +34,7 @@ warp.optim.linear's own docstrings) -- pass --check-every N>0 if you want
 early exit and don't mind the extra host syncs that requires.
 """
 import argparse
+import math
 import os
 import time
 
@@ -140,12 +141,21 @@ DIVERGED_ABSOLUTE_CAP = 1e4
 
 
 def print_leaderboard(rows, reference_residual=None):
-    residuals = [r[3] for r in rows]
-    min_residual = min(residuals + ([reference_residual] if reference_residual is not None else []))
+    # NaN comparisons are always False in IEEE 754, so `nan <= threshold` and
+    # `nan > threshold` are both False -- a NaN residual would silently
+    # vanish from both the "ok" and "diverged" lists below (and could also
+    # corrupt min() below, which has no defined NaN-skipping behavior)
+    # without this explicit filter. Route NaN rows straight to diverged.
+    finite_rows = [r for r in rows if not math.isnan(r[3])]
+    nan_rows = [r for r in rows if math.isnan(r[3])]
+
+    residuals = [r[3] for r in finite_rows]
+    candidates = residuals + ([reference_residual] if reference_residual is not None else [])
+    min_residual = min(candidates) if candidates else float("inf")
     threshold = min(max(min_residual * DIVERGED_FACTOR, DIVERGED_FLOOR), DIVERGED_ABSOLUTE_CAP)
 
-    ok = [r for r in rows if r[3] <= threshold]
-    diverged = [r for r in rows if r[3] > threshold]
+    ok = [r for r in finite_rows if r[3] <= threshold]
+    diverged = [r for r in finite_rows if r[3] > threshold] + nan_rows
     ok = sorted(ok, key=lambda r: r[1] + r[2])
 
     medals = ["\U0001F947", "\U0001F948", "\U0001F949"]
@@ -155,6 +165,10 @@ def print_leaderboard(rows, reference_residual=None):
         rank = medals[i] + f" {i+1}" if i < 3 else f"   {i+1}"
         print(f"| {rank} | {name:>16} | {t_factor:>9.2g} secs | {t_solve:>9.2g} secs | {residual:>10.6g} |")
     for name, t_factor, t_solve, residual in diverged:
+        if math.isnan(residual):
+            print(f"|    - | {name:>16} |           - |           - | "
+                  f"skipped: did not actually succeed: L∞ residual is NaN (solver diverged) |")
+            continue
         ratio = residual / min_residual if min_residual > 0 else float("inf")
         print(f"|    - | {name:>16} |           - |           - | "
               f"skipped: did not actually succeed: L∞ residual {residual:.4g} "
@@ -166,7 +180,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dir", required=True, help="directory of k<k>_Q.mtx/k<k>_rhs.mtx from --dump-matrices")
     ap.add_argument("--device", default=None, help="warp device (default: cuda:0 if available, else cpu)")
-    ap.add_argument("--maxiter", type=int, default=200, help="safety-net cap, matches the C++ benchmark's kMaxIterativeIterations -- see --tol for the actual intended stopping criterion")
+    ap.add_argument("--maxiter", type=int, default=20000, help="safety-net cap, matches the C++ benchmark's kMaxIterativeIterations -- deliberately high so --tol (the actual intended stopping criterion) is what usually decides, not this")
     ap.add_argument("--tol", type=float, default=1e-7, help="relative L2 residual tolerance (||b-Ax||_2 < tol*||b||_2), matches the C++ benchmark's kIterativeTolerance -- verified this is the same convergence formula Eigen's setTolerance() uses, so a given value means the same thing on both sides")
     ap.add_argument("--check-every", type=int, default=0, help="0 disables host-side convergence checks (pure CUDA-graph replay, but no early exit without device-side conditional graphs); >0 enables early exit at the cost of host syncs")
     ap.add_argument("--csv", default=None, help="write results in the same schema as the C++ benchmark's --csv")
