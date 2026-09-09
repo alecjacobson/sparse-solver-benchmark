@@ -19,6 +19,12 @@ solvers can't handle at all, and a couple can't even handle *gracefully* (see
 > - **NVIDIA cuDSS** 🚀 wins every flattened (SPD) system here once the mesh
 >   is large (720K vertices) — and its *solve* step is essentially free
 >   (single-digit milliseconds) once factored, since it stays resident on the GPU.
+>   On the indefinite mixed systems it's more of a mixed bag (pun intended):
+>   with iterative refinement enabled it's essentially exact on the mixed
+>   biharmonic system, but still silently wrong on the harder mixed
+>   triharmonic one — see ⚠️ below, this cuDSS version's pivoting for
+>   symmetric indefinite matrices has a real gap (Bunch-Kaufman pivoting
+>   isn't supported yet), confirmed directly with NVIDIA.
 > - **MKL Pardiso** 🏆 is the strongest CPU-only runner-up on SPD systems.
 > - **CHOLMOD / Eigen SimplicialLLT·LDLT / catamari** 🥈 remain solid, accurate,
 >   dependency-light choices when no GPU is available.
@@ -49,12 +55,16 @@ solvers can't handle at all, and a couple can't even handle *gracefully* (see
 >   taking *minutes* instead of seconds, that's a build misconfiguration, not
 >   real solver cost.
 > - **NVIDIA Warp**'s `warp.optim.linear` solvers (`cg`/`cr`/`bicgstab`/
->   `gmres`, timed separately via [`warp_bench/`](warp_bench/)) top every
->   table here by raw speed — sub-2-second solves on every system, including
->   the 2.16M-row mixed triharmonic one — but at the same 200-iteration cap
->   as Eigen's iterative solvers, that's nowhere near enough to converge at
->   this scale, so their residuals are correspondingly huge. Read these rows
->   as "how fast is one Warp iteration," not "how accurate is Warp."
+>   `gmres`, timed separately via [`warp_bench/`](warp_bench/)) run to the
+>   same `1e-7` relative tolerance as Eigen's iterative solvers, but with
+>   only Jacobi preconditioning (the strongest Warp currently offers — Eigen
+>   uses incomplete-LU, meaningfully stronger) and the same 200-iteration
+>   safety-net cap. At this mesh's real scale (360K-2.16M rows), that
+>   combination usually isn't enough to actually converge, so most `warp::*`
+>   rows are correctly caught by the did-not-actually-succeed check (see
+>   below) and don't appear ranked at all — a genuine, if slightly deflating,
+>   result: naive Warp iterative solvers aren't a free win over tuned CPU/GPU
+>   direct solvers at this problem size without a better preconditioner.
 >
 > ¹Flattened systems are
 > [SPD](https://en.wikipedia.org/wiki/Definite_symmetric_matrix) so LU is not
@@ -113,6 +123,34 @@ solvers can't handle at all, and a couple can't even handle *gracefully* (see
 >
 > These are all skipped only for that one system (`k==5` in `main.cpp`); they
 > run normally everywhere else, including the smaller mixed biharmonic system.
+
+> [!WARNING]
+> **cuDSS "succeeds" (`CUDSS_STATUS_SUCCESS`, no error) on the mixed
+> triharmonic system while silently returning a numerically useless
+> answer** (L∞ residual in the tens of thousands — see the table above,
+> where it's correctly caught by this benchmark's did-not-actually-succeed
+> check rather than shown as a real result). Root cause, confirmed directly
+> with NVIDIA's cuDSS team: this cuDSS version's only pivoting strategy for
+> `CUDSS_MTYPE_SYMMETRIC` matrices is `CUDSS_PIVOT_DIAGONAL` (diagonal-only
+> search) — `CUDSS_PIVOT_BUNCH_KAUFMAN`, the safe block-pivoting strategy
+> NASOQ uses (see above), is explicitly "reserved for future, not supported
+> yet" in `cudss_data_types.h`. Diagonal-only pivoting can't find a safe
+> pivot in a block that's structurally all-zero on the diagonal (this
+> system's λ block, same root cause as the Pardiso/NASOQ issues above), so
+> the factorization silently produces garbage rather than erroring out.
+> NVIDIA confirmed Bunch-Kaufman pivoting is coming in cuDSS's next release,
+> and suggested enabling iterative refinement (`CUDSS_CONFIG_IR_N_STEPS`) as
+> a workaround in the meantime — this benchmark now sets it to `2` for
+> `CUDSS_MTYPE_SYMMETRIC` solves (see `solve_cudss()`). It genuinely fixes
+> the **mixed biharmonic** system (residual improved from `2.6e-05` to
+> `5.5e-11`, essentially machine precision) but does **not** fix the mixed
+> triharmonic one — empirically (`IR_N_STEPS` from 2 up to 20 tested on a
+> small synthetic case) the result is at best inconsistent, ranging from
+> ~1e-6 to ~5.9 residual run-to-run on the *identical* input, matching
+> NVIDIA's own statement that enabling their deterministic mode makes a
+> wrong answer *consistently* wrong rather than fixing its accuracy — so
+> this benchmark doesn't rely on IR alone to detect success here; the
+> did-not-actually-succeed check above is the real safety net.
 
 > [!WARNING]
 > **NASOQ LBL's `solve_only()` looked absurdly slow (16-24 seconds!) on
@@ -218,131 +256,137 @@ produces:
 
 | Rank |                          Method |      Factor |       Solve |     L∞ norm |
 |-----:|--------------------------------:|------------:|------------:|------------:|
-| 🥇 1 |                         warp::cg |    0.0013 secs |     0.052 secs |     1521.55 |
-| 🥈 2 |                         warp::cr |    0.0019 secs |     0.058 secs |     16.3665 |
-| 🥉 3 |                   warp::bicgstab |    0.0013 secs |      0.11 secs |     128.245 |
-|    4 |                      warp::gmres |    0.0013 secs |      0.27 secs |     30.6497 |
-|    5 |             Eigen::SimplicialLLT |      1.2 secs |     0.13 secs | 4.55334e-11 |
-|    6 |            Eigen::SimplicialLDLT |      1.2 secs |     0.13 secs | 1.12086e-10 |
-|    7 |              catamari::SparseLDL |      1.4 secs |     0.11 secs | 3.82439e-11 |
-|    8 |                     NVIDIA cuDSS |      2.2 secs |   0.0022 secs | 1.59312e-10 |
-|    9 |                        NASOQ LBL |      2.6 secs |     0.17 secs | 1.09436e-10 |
-|   10 |   Eigen::BiCGSTAB\<IncompleteLUT\> |      1.6 secs |      1.3 secs | 1.23985e-10 |
-|   11 |         Eigen::CG\<IncompleteLUT\> |      1.6 secs |      2.8 secs | 8.96274e-11 |
-|   12 |                Eigen::PardisoLLT |      3.3 secs |      1.1 secs | 7.58549e-11 |
-|   13 |               Eigen::PardisoLDLT |      3.2 secs |      1.3 secs | 1.04873e-10 |
-|   14 |                  Eigen::SparseLU |      4.9 secs |     0.18 secs | 2.37845e-11 |
-|   15 |      Eigen::CholmodSupernodalLLT |      6.7 secs |     0.75 secs | 6.63736e-11 |
-|   16 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |      9.2 secs | 5.25522e-11 |
-|   17 |                 Eigen::UmfPackLU |       28 secs |     0.76 secs | 4.20999e-11 |
+| 🥇 1 |            Eigen::SimplicialLDLT |      1.2 secs |     0.13 secs | 1.12086e-10 |
+| 🥈 2 |             Eigen::SimplicialLLT |      1.2 secs |     0.13 secs | 4.55334e-11 |
+| 🥉 3 |              catamari::SparseLDL |      1.4 secs |     0.11 secs | 3.82439e-11 |
+|    4 |   Eigen::BiCGSTAB<IncompleteLUT> |      1.6 secs |     0.76 secs | 1.37219e-10 |
+|    5 |                     NVIDIA cuDSS |      2.4 secs |   0.0026 secs | 1.59312e-10 |
+|    6 |         Eigen::CG<IncompleteLUT> |      1.6 secs |     0.84 secs |  1.4579e-05 |
+|    7 |                        NASOQ LBL |      2.6 secs |     0.18 secs | 1.09436e-10 |
+|    8 |                Eigen::PardisoLLT |        3 secs |        1 secs | 7.58549e-11 |
+|    9 |               Eigen::PardisoLDLT |      3.2 secs |      1.1 secs | 1.04873e-10 |
+|   10 |                  Eigen::SparseLU |        5 secs |     0.21 secs | 2.37845e-11 |
+|   11 |      Eigen::CholmodSupernodalLLT |      6.3 secs |     0.53 secs | 6.63736e-11 |
+|   12 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |      9.6 secs | 5.25522e-11 |
+|   13 |                 Eigen::UmfPackLU |       30 secs |     0.65 secs | 4.20999e-11 |
+|    - |                         warp::cg |           - |           - | skipped: did not actually succeed: L∞ residual 14.51 is 6.1e+11 x the best solver's (2.378e-11) on this system |
+|    - |                         warp::cr |           - |           - | skipped: did not actually succeed: L∞ residual 33.35 is 1.4e+12 x the best solver's (2.378e-11) on this system |
+|    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: L∞ residual 57.67 is 2.42e+12 x the best solver's (2.378e-11) on this system |
+|    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: L∞ residual 31.49 is 1.32e+12 x the best solver's (2.378e-11) on this system |
+
+*(fused): this solver's API has no separate factor step; the whole
+ analysis+factor+solve cost is reported under Solve instead.
 
 # Biharmonic
 
 | Rank |                          Method |      Factor |       Solve |     L∞ norm |
 |-----:|--------------------------------:|------------:|------------:|------------:|
-| 🥇 1 |                         warp::cg |    0.0068 secs |       0.1 secs |   1.40821e+06 |
-| 🥈 2 |                         warp::cr |    0.0013 secs |      0.11 secs |     127.337 |
-| 🥉 3 |                   warp::bicgstab |    0.0013 secs |      0.22 secs |     1076.87 |
-|    4 |                      warp::gmres |    0.0013 secs |      0.41 secs |     128.031 |
-|    5 |      Eigen::CholmodSupernodalLLT |      2.2 secs |     0.26 secs | 9.99686e-05 |
-|    6 |                     NVIDIA cuDSS |        4 secs |    0.008 secs | 0.000142766 |
-|    7 |                        NASOQ LBL |      5.3 secs |     0.29 secs | 0.000148578 |
-|    8 |                Eigen::PardisoLLT |      4.9 secs |      1.1 secs | 6.93083e-05 |
-|    9 |               Eigen::PardisoLDLT |        5 secs |        1 secs | 4.78335e-05 |
-|   10 |                 Eigen::UmfPackLU |      5.4 secs |      1.9 secs | 8.19072e-05 |
-|   11 |             Eigen::SimplicialLLT |      9.1 secs |     0.39 secs | 2.60041e-05 |
-|   12 |            Eigen::SimplicialLDLT |      9.1 secs |      0.4 secs | 4.80425e-05 |
-|   13 |              catamari::SparseLDL |       11 secs |     0.43 secs | 3.05382e-05 |
-|   14 |   Eigen::BiCGSTAB\<IncompleteLUT\> |       11 secs |      4.5 secs | 5.56194e-05 |
-|   15 |         Eigen::CG\<IncompleteLUT\> |       11 secs |      6.3 secs | 4.73183e-05 |
-|   16 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       20 secs | 3.40111e-05 |
-|   17 |                  Eigen::SparseLU |       35 secs |     0.66 secs | 2.46911e-05 |
+| 🥇 1 |      Eigen::CholmodSupernodalLLT |      2.2 secs |     0.25 secs | 9.99686e-05 |
+| 🥈 2 |                     NVIDIA cuDSS |        4 secs |    0.018 secs | 6.79479e-05 |
+| 🥉 3 |                        NASOQ LBL |      5.3 secs |     0.29 secs | 0.000148578 |
+|    4 |                Eigen::PardisoLLT |      4.9 secs |     0.83 secs | 6.93083e-05 |
+|    5 |               Eigen::PardisoLDLT |        5 secs |      1.1 secs | 4.78335e-05 |
+|    6 |                 Eigen::UmfPackLU |      5.4 secs |        2 secs | 8.19072e-05 |
+|    7 |             Eigen::SimplicialLLT |      9.1 secs |     0.39 secs | 2.60041e-05 |
+|    8 |            Eigen::SimplicialLDLT |      9.2 secs |     0.53 secs | 4.80425e-05 |
+|    9 |              catamari::SparseLDL |       11 secs |     0.42 secs | 3.05382e-05 |
+|   10 |         Eigen::CG<IncompleteLUT> |       12 secs |      2.3 secs |  5.3789e-05 |
+|   11 |   Eigen::BiCGSTAB<IncompleteLUT> |       12 secs |      2.5 secs | 7.33713e-05 |
+|   12 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       20 secs | 3.40111e-05 |
+|   13 |                  Eigen::SparseLU |       34 secs |     0.74 secs | 2.46911e-05 |
+|    - |                         warp::cg |           - |           - | skipped: did not actually succeed: L∞ residual 1.963e+04 is 7.95e+08 x the best solver's (2.469e-05) on this system |
+|    - |                         warp::cr |           - |           - | skipped: did not actually succeed: L∞ residual 529.9 is 2.15e+07 x the best solver's (2.469e-05) on this system |
+|    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: L∞ residual 552.7 is 2.24e+07 x the best solver's (2.469e-05) on this system |
+|    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: L∞ residual 98.38 is 3.98e+06 x the best solver's (2.469e-05) on this system |
+
+*(fused): this solver's API has no separate factor step; the whole
+ analysis+factor+solve cost is reported under Solve instead.
 
 # Triharmonic
 
 | Rank |                          Method |      Factor |       Solve |     L∞ norm |
 |-----:|--------------------------------:|------------:|------------:|------------:|
-| 🥇 1 |                         warp::cr |    0.0015 secs |      0.91 secs |     128.344 |
-| 🥈 2 |                         warp::cg |     0.037 secs |      0.89 secs |      546670 |
-| 🥉 3 |                      warp::gmres |    0.0013 secs |       1.4 secs |     128.344 |
-|    4 |                   warp::bicgstab |    0.0016 secs |       1.7 secs |     45520.5 |
-|    5 |                     NVIDIA cuDSS |      6.5 secs |   0.0054 secs |     31.6823 |
-|    6 |      Eigen::CholmodSupernodalLLT |      9.5 secs |     0.32 secs |     6.77554 |
-|    7 |                Eigen::PardisoLLT |      9.3 secs |      1.1 secs |       10.86 |
-|    8 |               Eigen::PardisoLDLT |      9.4 secs |      1.7 secs |     23.1328 |
-|    9 |                        NASOQ LBL |       11 secs |     0.45 secs |      61.402 |
-|   10 |                 Eigen::UmfPackLU |       14 secs |  4.8e-07 secs |     6.77554 |
-|   11 |            Eigen::SimplicialLDLT |       36 secs |     0.86 secs |     93.8209 |
-|   12 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       37 secs |     38.1472 |
-|   13 |             Eigen::SimplicialLLT |       36 secs |     0.92 secs |     39.0697 |
-|   14 |   Eigen::BiCGSTAB\<IncompleteLUT\> |       41 secs |      1.6 secs |         nan |
-|   15 |              catamari::SparseLDL |       45 secs |     0.95 secs |     25.3056 |
-|   16 |                  Eigen::SparseLU |  1.5e+02 secs |      1.9 secs |     37.5559 |
-|   17 |         Eigen::CG\<IncompleteLUT\> |       41 secs |  1.5e+02 secs |         nan |
+| 🥇 1 |                      warp::gmres |  0.00046 secs |     0.68 secs |     124.288 |
+| 🥈 2 |                     NVIDIA cuDSS |      6.5 secs |   0.0054 secs |     38.0908 |
+| 🥉 3 |      Eigen::CholmodSupernodalLLT |      9.6 secs |     0.32 secs |     6.77554 |
+|    4 |                Eigen::PardisoLLT |      8.9 secs |      1.3 secs |       10.86 |
+|    5 |               Eigen::PardisoLDLT |        9 secs |      1.2 secs |     23.1328 |
+|    6 |                        NASOQ LBL |       11 secs |     0.44 secs |      61.402 |
+|    7 |                 Eigen::UmfPackLU |       14 secs |  7.2e-07 secs |     6.77554 |
+|    8 |             Eigen::SimplicialLLT |       35 secs |     0.88 secs |     39.0697 |
+|    9 |            Eigen::SimplicialLDLT |       35 secs |     0.91 secs |     93.8209 |
+|   10 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       36 secs |     38.1472 |
+|   11 |              catamari::SparseLDL |       45 secs |     0.84 secs |     25.3056 |
+|   12 |                  Eigen::SparseLU |  1.5e+02 secs |      1.8 secs |     37.5559 |
+|    - |                         warp::cg |           - |           - | skipped: did not actually succeed: L∞ residual 1.243e+09 is 1.83e+08 x the best solver's (6.776) on this system |
+|    - |                         warp::cr |           - |           - | skipped: did not actually succeed: L∞ residual 1.748e+06 is 2.58e+05 x the best solver's (6.776) on this system |
+|    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: L∞ residual 1.988e+07 is 2.93e+06 x the best solver's (6.776) on this system |
+
+*(fused): this solver's API has no separate factor step; the whole
+ analysis+factor+solve cost is reported under Solve instead.
 
 # Mixed Biharmonic (unflattened, indefinite)
 
 | Rank |                          Method |      Factor |       Solve |     L∞ norm |
 |-----:|--------------------------------:|------------:|------------:|------------:|
-| 🥇 1 |                         warp::cg |     0.016 secs |      0.19 secs |      165519 |
-| 🥈 2 |                         warp::cr |    0.0024 secs |      0.23 secs |     131.166 |
-| 🥉 3 |                   warp::bicgstab |    0.0024 secs |      0.43 secs |     38996.8 |
-|    4 |                      warp::gmres |    0.0025 secs |         1 secs |     117.849 |
-|    5 |                     NVIDIA cuDSS |      5.4 secs |   0.0038 secs | 4.32598e-05 |
-|    6 |                        NASOQ LBL |        7 secs |     0.49 secs | 1.68701e-05 |
-|    7 |            Eigen::SimplicialLDLT |      9.4 secs |     0.45 secs | 6.46751e-05 |
-|    8 |                 Eigen::UmfPackLU |       11 secs |      2.2 secs |  8.0989e-11 |
-|    9 |               Eigen::PardisoLDLT |        7 secs |      6.8 secs | 5.45176e-11 |
-|   10 |         Eigen::CG\<IncompleteLUT\> |      8.5 secs |       49 secs | 3.27831e+06 |
-|   11 |     catamari::SparseLDL (LDLᵀ) |  1.3e+02 secs |      0.5 secs | 8.34264e-05 |
-|   12 |                  Eigen::SparseLU |  1.5e+02 secs |     0.82 secs | 1.09842e-10 |
-|   13 |   Eigen::BiCGSTAB\<IncompleteLUT\> |      8.2 secs |  1.7e+02 secs | 9.73973e-09 |
+| 🥇 1 |                     NVIDIA cuDSS |      5.4 secs |    0.014 secs | 5.47711e-11 |
+| 🥈 2 |                        NASOQ LBL |      6.9 secs |      0.5 secs | 1.68701e-05 |
+| 🥉 3 |               Eigen::PardisoLDLT |      6.1 secs |      2.3 secs | 5.45176e-11 |
+|    4 |            Eigen::SimplicialLDLT |      8.9 secs |     0.45 secs | 6.46751e-05 |
+|    5 |       catamari::SparseLDL (LDLᵀ) |       12 secs |     0.43 secs | 8.34264e-05 |
+|    6 |                 Eigen::UmfPackLU |       11 secs |      2.2 secs |  8.0989e-11 |
+|    7 |                  Eigen::SparseLU |       30 secs |      0.8 secs | 1.09842e-10 |
+|    8 |   Eigen::BiCGSTAB<IncompleteLUT> |      8.3 secs |       67 secs | 3.33011e-08 |
+|    - |         Eigen::CG<IncompleteLUT> |           - |           - | skipped: did not actually succeed: L∞ residual 3.278e+06 is 6.01e+16 x the best solver's (5.452e-11) on this system |
+|    - |                         warp::cg |           - |           - | skipped: did not actually succeed: L∞ residual 5067 is 9.29e+13 x the best solver's (5.452e-11) on this system |
+|    - |                         warp::cr |           - |           - | skipped: did not actually succeed: L∞ residual 4.021e+14 is 7.38e+24 x the best solver's (5.452e-11) on this system |
+|    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: L∞ residual 5889 is 1.08e+14 x the best solver's (5.452e-11) on this system |
+|    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: L∞ residual 1.511 is 2.77e+10 x the best solver's (5.452e-11) on this system |
+|    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
+|    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
+|    - |                Eigen::PardisoLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |        NVIDIA cuSOLVER (Sp Chol) |           - |           - | skipped: no indefinite/LDLT solver in this cuSOLVER version |
-|    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed (not SPD, as expected) |
-|    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed (not SPD, as expected) |
-|    - |                Eigen::PardisoLLT |           - |           - | skipped: factorization failed (not SPD, as expected) |
 
 # Mixed Triharmonic (unflattened, indefinite)
 
 | Rank |                          Method |      Factor |       Solve |     L∞ norm |
 |-----:|--------------------------------:|------------:|------------:|------------:|
-| 🥇 1 |                         warp::cg |     0.019 secs |      0.35 secs |     166357 |
-| 🥈 2 |                         warp::cr |    0.0038 secs |       0.4 secs |     131.168 |
-| 🥉 3 |                   warp::bicgstab |    0.0041 secs |      0.74 secs |     6801.41 |
-|    4 |                      warp::gmres |    0.0038 secs |       1.5 secs |     120.478 |
-|    5 |                     NVIDIA cuDSS |      9.3 secs |   0.0068 secs |     28903.4 |
-|    6 |     catamari::SparseLDL (LDLᵀ) |       46 secs |      1.1 secs | 2.88158e-06 |
-|    7 |                  Eigen::SparseLU |  1.1e+02 secs |      1.6 secs | 1.00706e-10 |
-|    8 |         Eigen::CG\<IncompleteLUT\> |  6.2e+02 secs |       97 secs |     1735.27 |
-|    9 |   Eigen::BiCGSTAB\<IncompleteLUT\> |  6.1e+02 secs |  1.9e+02 secs |      130.92 |
-|    - |                 Eigen::UmfPackLU |           - |           - | skipped: known crash risk (see ⚠️ above) |
-|    - |            Eigen::SimplicialLDLT |           - |           - | skipped: known crash (see ⚠️ above) |
-|    - |                        NASOQ LBL |           - |           - | skipped: known crash (see ⚠️ above) |
-|    - |                Eigen::PardisoLLT |           - |           - | skipped: known hang (see ⚠️ above) |
-|    - |               Eigen::PardisoLDLT |           - |           - | skipped: known hang (see ⚠️ above) |
+| 🥇 1 |       catamari::SparseLDL (LDLᵀ) |       46 secs |        1 secs | 2.88158e-06 |
+| 🥈 2 |                  Eigen::SparseLU |    1e+02 secs |      1.7 secs | 1.00706e-10 |
+|    - |   Eigen::BiCGSTAB<IncompleteLUT> |           - |           - | skipped: did not actually succeed: L∞ residual 130.9 is 1.3e+12 x the best solver's (1.007e-10) on this system |
+|    - |         Eigen::CG<IncompleteLUT> |           - |           - | skipped: did not actually succeed: L∞ residual 1735 is 1.72e+13 x the best solver's (1.007e-10) on this system |
+|    - |                     NVIDIA cuDSS |           - |           - | skipped: did not actually succeed: L∞ residual 8.284e+04 is 8.23e+14 x the best solver's (1.007e-10) on this system |
+|    - |                         warp::cg |           - |           - | skipped: did not actually succeed: L∞ residual 8.638e+07 is 8.58e+17 x the best solver's (1.007e-10) on this system |
+|    - |                         warp::cr |           - |           - | skipped: did not actually succeed: L∞ residual 1.378 is 1.37e+10 x the best solver's (1.007e-10) on this system |
+|    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: L∞ residual 2.414 is 2.4e+10 x the best solver's (1.007e-10) on this system |
+|    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: L∞ residual 1.392 is 1.38e+10 x the best solver's (1.007e-10) on this system |
+|    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
+|    - |                 Eigen::UmfPackLU |           - |           - | skipped: known crash risk: excessive MKL thread churn on this system's fill-in |
+|    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
+|    - |            Eigen::SimplicialLDLT |           - |           - | skipped: known crash: SIGSEGV in Eigen's unpivoted LDLT at this scale |
+|    - |                        NASOQ LBL |           - |           - | skipped: known crash: SIGSEGV in libmetis genmmd/mmdelm via NASOQ's symbolic_analysis_lin_solve on this system's sparsity pattern |
+|    - |                Eigen::PardisoLLT |           - |           - | skipped: known Pardiso reordering hang on this system's sparsity pattern |
+|    - |               Eigen::PardisoLDLT |           - |           - | skipped: known Pardiso reordering hang on this system's sparsity pattern |
 |    - |        NVIDIA cuSOLVER (Sp Chol) |           - |           - | skipped: no indefinite/LDLT solver in this cuSOLVER version |
-|    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed (not SPD, as expected) |
-|    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed (not SPD, as expected) |
 
-(BiCGSTAB/CG are capped at 200 iterations — the `nan`/large-residual rows
-reflect genuine non-convergence/divergence on badly-scaled or indefinite
-systems, not a bug. cuDSS's large residual on the mixed triharmonic system
-reflects genuine numerical difficulty on this particularly hard indefinite
-matrix — unlike the SPD-only solvers, it doesn't fail cleanly, it just
-returns a less accurate answer; `SparseLU`/catamari's pivoted LDLᵀ remain
-the trustworthy references there. See "What are the systems being solved?"
-below for why k=3/mixed-triharmonic are inherently harder.
-
-The `warp::*` rows are [NVIDIA Warp](https://github.com/NVIDIA/warp)'s
-`warp.optim.linear` iterative solvers, timed separately via
-[`warp_bench/`](warp_bench/) (see `--dump-matrices` above) and capped at the
-same 200 iterations as the Eigen iterative solvers for direct comparability
-— which is *not* enough iterations to converge on a system this large
-(360K-2.16M rows depending on k), so their huge residuals are expected, not
-a bug: these rows show how fast Warp's GPU-native solvers run per iteration,
-not their achievable accuracy. A tolerance-based comparison across every
-iterative solver here (Eigen's and Warp's alike) — so "200 iterations" isn't
-silently doing the deciding — is planned as a follow-up.)
+(Every solver here — direct or iterative, C++ or the `warp::*` rows from
+[`warp_bench/`](warp_bench/), see `--dump-matrices` above — is checked
+against every other solver's result on the same system: if a row's L∞
+residual is enormous relative to the best actually achieved there, it's
+reclassified as "did not actually succeed" and moved to the skipped section
+instead of ranking with a misleadingly-real-looking number, even if the
+solver itself reported success. This catches genuine silent failures like
+cuDSS's on the mixed triharmonic system (see ⚠️ below) as well as iterative
+solvers that hit their iteration cap without reaching tolerance — both
+Eigen's BiCGSTAB/CG and Warp's `cg`/`cr`/`bicgstab`/`gmres` now run to a real
+relative-L2 tolerance of `1e-7` (not just an iteration cap; see the ⚠️ note
+below) but can still fail to reach it on a large-enough or hard-enough
+system, which is exactly what most of the `warp::*` rows above show: at this
+mesh's scale (360K-2.16M rows) and with only Jacobi preconditioning (the
+strongest Warp currently offers; Eigen's rows use incomplete-LU, a
+meaningfully stronger preconditioner Warp doesn't have), 200 iterations
+usually isn't enough to converge, so most Warp rows are correctly caught by
+this check rather than ranking on raw iteration speed alone.)
 
 \*(fused): cuSOLVER's `cusolverSpDcsrlsvchol` has no separate factor step —
 it fuses reordering + symbolic + numeric factorization + triangular solve

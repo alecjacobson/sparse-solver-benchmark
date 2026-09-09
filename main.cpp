@@ -26,12 +26,14 @@
 #endif
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -386,6 +388,26 @@ void solve_cudss(
   cudssData_t data;
   CUDSS_CHECK(cudssCreate(&handle));
   CUDSS_CHECK(cudssConfigCreate(&config));
+  if(mtype == CUDSS_MTYPE_SYMMETRIC)
+  {
+    // This cuDSS version's only pivoting strategy for symmetric indefinite
+    // matrices is CUDSS_PIVOT_DIAGONAL (diagonal-only search) --
+    // CUDSS_PIVOT_BUNCH_KAUFMAN, the safe block-pivoting strategy NASOQ
+    // uses, is "reserved for future, not supported yet" per
+    // cudss_data_types.h in this version. Diagonal-only pivoting can't find
+    // a safe pivot in a block that's structurally all-zero on the diagonal
+    // (this benchmark's mixed-system λ block), so factorization silently
+    // succeeds with a numerically useless answer instead of erroring out
+    // (see the README's ⚠️ note, confirmed directly with NVIDIA's cuDSS
+    // team). They suggested iterative refinement as a mitigation in the
+    // meantime; it genuinely fixes the mixed biharmonic system (near
+    // machine precision) but not the harder mixed triharmonic one, and is
+    // itself inconsistent run-to-run there -- this benchmark's own
+    // did-not-actually-succeed check (see print_leaderboard) is the real
+    // safety net, not this alone.
+    const int ir_n_steps = 2;
+    CUDSS_CHECK(cudssConfigSet(config,CUDSS_CONFIG_IR_N_STEPS,&ir_n_steps,sizeof(ir_n_steps)));
+  }
   CUDSS_CHECK(cudssDataCreate(handle,&data));
 
   cudssMatrix_t A, B, X;
@@ -774,10 +796,63 @@ static std::string machine_info()
   return info;
 }
 
+// A solver can report success (Eigen's info()==Success, cuDSS's
+// CUDSS_STATUS_SUCCESS, ...) while still having silently produced a
+// numerically useless answer -- e.g. cuDSS on the mixed triharmonic system:
+// it completes without error, but its only pivoting strategy for symmetric
+// indefinite matrices is CUDSS_PIVOT_DIAGONAL (diagonal-only search;
+// CUDSS_PIVOT_BUNCH_KAUFMAN, the safe block-pivoting strategy NASOQ uses,
+// is explicitly "reserved for future, not supported yet" per cudss_data_types.h
+// in this version), which can't find a safe pivot in a block that's
+// structurally all-zero on the diagonal (this system's λ block) -- so
+// rather than trust any solver's own success signal, reclassify any row
+// whose residual is enormous relative to the best solver actually achieved
+// on this same system as "didn't actually succeed", moving it to the
+// skipped section instead of letting it rank with a misleadingly-real-looking
+// number. Applies uniformly, including iterative solvers (Eigen's
+// BiCGSTAB/CG, Warp's cg/cr/bicgstab/gmres): those are configured to run to
+// a real tolerance now (kIterativeTolerance), not just an iteration cap, so
+// if one still comes back with a huge residual, that's a genuine failure to
+// converge worth surfacing the same way, not something to quietly rank.
+static const double kDivergedFactor = 1e6;
+static const double kDivergedFloor = 1e-3;
+// On the flattened triharmonic system, even a genuinely-converged solve can
+// legitimately have a residual in the hundreds (see the "badly scaled"
+// note below) -- so on a hard system where the best achieved residual is
+// itself already large, kDivergedFactor alone produces an enormous
+// threshold that lets truly nonsensical answers (e.g. residual ~1e6) slip
+// through uncaught. Cap the threshold at this absolute value regardless of
+// how large the best residual is; chosen well above the worst *legitimate*
+// residual observed on the real dragon mesh (~150, SparseLU/CG on the
+// flattened triharmonic system) with headroom to spare.
+static const double kDivergedAbsoluteCap = 1e4;
+
 static void print_leaderboard(int k)
 {
   std::vector<Result> rows;
   for(const auto & r : g_results) if(r.k==k) rows.push_back(r);
+
+  double min_residual = std::numeric_limits<double>::infinity();
+  for(const auto & r : rows) if(!r.skipped) min_residual = std::min(min_residual, r.residual);
+  if(std::isfinite(min_residual))
+  {
+    const double threshold = std::min(
+      std::max(min_residual*kDivergedFactor, kDivergedFloor),
+      kDivergedAbsoluteCap);
+    for(auto & r : rows)
+    {
+      if(!r.skipped && r.residual > threshold)
+      {
+        char buf[256];
+        snprintf(buf,sizeof(buf),
+          "did not actually succeed: L%s residual %.4g is %.3g x the best solver's (%.4g) on this system",
+          "∞",r.residual,r.residual/min_residual,min_residual);
+        r.skipped = true;
+        r.skip_reason = buf;
+      }
+    }
+  }
+
   std::stable_sort(rows.begin(),rows.end(),[](const Result & a,const Result & b)
   {
     if(a.skipped != b.skipped) return !a.skipped;

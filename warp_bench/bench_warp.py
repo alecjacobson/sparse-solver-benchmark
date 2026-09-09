@@ -79,18 +79,30 @@ def to_warp_matrix(Q, device):
 def run_solver(fn, A, Q_scipy, rhs, device, maxiter, tol, check_every):
     """Solves every RHS column separately (warp's solvers take a single b/x
     vector at a time, same constraint NASOQ's solve_only() has on the C++
-    side); returns (t_factor, t_solve, linf_residual)."""
+    side); returns (t_factor, t_solve, linf_residual).
+
+    Uses Warp's Jacobi ("diag") preconditioner -- the closest thing Warp
+    offers to the Eigen side's IncompleteLUT (Warp has no incomplete-LU
+    preconditioner at all, only diag/diag_abs/id). Jacobi is a strictly
+    weaker preconditioner than ILU, so this narrows but does not close the
+    fairness gap between the two sides; see the README note next to the
+    leaderboard tables."""
     n, nrhs = rhs.shape
 
-    t0 = time.perf_counter()
+    # Warm-up: absorb JIT compilation of both the preconditioner-construction
+    # kernel and the solver's own kernels/CUDA-graph capture, none of which
+    # are representative of steady-state cost (each only pays once per
+    # process, cached across every later call/matrix size).
+    wol.preconditioner(A, "diag")
     b0 = wp.array(rhs[:, 0].copy(), dtype=wp.float64, device=device)
     x0 = wp.zeros(n, dtype=wp.float64, device=device)
+    fn(A, b0, x0, tol=tol, maxiter=maxiter, M=wol.preconditioner(A, "diag"), check_every=check_every, use_cuda_graph=True)
+    wp.synchronize()
+
+    t0 = time.perf_counter()
+    M = wol.preconditioner(A, "diag")
     wp.synchronize()
     t_factor = time.perf_counter() - t0
-
-    # Warm-up: absorb JIT compilation + first-launch CUDA-graph capture.
-    fn(A, b0, x0, tol=tol, maxiter=maxiter, check_every=check_every, use_cuda_graph=True)
-    wp.synchronize()
 
     U = np.zeros((n, nrhs))
     t_solve = 0.0
@@ -99,7 +111,7 @@ def run_solver(fn, A, Q_scipy, rhs, device, maxiter, tol, check_every):
         x = wp.zeros(n, dtype=wp.float64, device=device)
         wp.synchronize()
         t0 = time.perf_counter()
-        fn(A, b, x, tol=tol, maxiter=maxiter, check_every=check_every, use_cuda_graph=True)
+        fn(A, b, x, tol=tol, maxiter=maxiter, M=M, check_every=check_every, use_cuda_graph=True)
         wp.synchronize()
         t_solve += time.perf_counter() - t0
         U[:, c] = x.numpy()
@@ -108,14 +120,46 @@ def run_solver(fn, A, Q_scipy, rhs, device, maxiter, tol, check_every):
     return t_factor, t_solve, residual
 
 
-def print_leaderboard(rows):
-    rows = sorted(rows, key=lambda r: r[1] + r[2])
+# Same reclassification the C++ benchmark applies (see main.cpp's
+# kDivergedFactor/kDivergedFloor and print_leaderboard()): a solver can
+# report "success" while its residual is still enormous relative to what's
+# actually achievable on this system, which is a real failure to converge,
+# not a data point worth ranking. reference_residual, when given (from the
+# C++ side's --csv, via --reference-csv below), is the true best across
+# every solver on this k -- not just Warp's own four -- so a Warp solver
+# that's uniformly bad relative to a good direct solve on the same system
+# gets caught too, not just relative to its own (possibly also-bad) peers.
+DIVERGED_FACTOR = 1e6
+DIVERGED_FLOOR = 1e-3
+# See main.cpp's kDivergedAbsoluteCap: on a hard system where even the best
+# achieved residual is already large (e.g. the flattened triharmonic
+# system), DIVERGED_FACTOR alone produces a threshold so loose that a truly
+# nonsensical residual can slip through uncaught. Same value as the C++ side
+# for consistency.
+DIVERGED_ABSOLUTE_CAP = 1e4
+
+
+def print_leaderboard(rows, reference_residual=None):
+    residuals = [r[3] for r in rows]
+    min_residual = min(residuals + ([reference_residual] if reference_residual is not None else []))
+    threshold = min(max(min_residual * DIVERGED_FACTOR, DIVERGED_FLOOR), DIVERGED_ABSOLUTE_CAP)
+
+    ok = [r for r in rows if r[3] <= threshold]
+    diverged = [r for r in rows if r[3] > threshold]
+    ok = sorted(ok, key=lambda r: r[1] + r[2])
+
     medals = ["\U0001F947", "\U0001F948", "\U0001F949"]
     print("\n| Rank |          Method |      Factor |       Solve |     L∞ norm |")
     print("|-----:|-----------------:|------------:|------------:|------------:|")
-    for i, (name, t_factor, t_solve, residual) in enumerate(rows):
+    for i, (name, t_factor, t_solve, residual) in enumerate(ok):
         rank = medals[i] + f" {i+1}" if i < 3 else f"   {i+1}"
         print(f"| {rank} | {name:>16} | {t_factor:>9.2g} secs | {t_solve:>9.2g} secs | {residual:>10.6g} |")
+    for name, t_factor, t_solve, residual in diverged:
+        ratio = residual / min_residual if min_residual > 0 else float("inf")
+        print(f"|    - | {name:>16} |           - |           - | "
+              f"skipped: did not actually succeed: L∞ residual {residual:.4g} "
+              f"is {ratio:.3g} x the best solver's ({min_residual:.4g}) on this system |")
+    return diverged
 
 
 def main():
@@ -126,7 +170,18 @@ def main():
     ap.add_argument("--tol", type=float, default=1e-7, help="relative L2 residual tolerance (||b-Ax||_2 < tol*||b||_2), matches the C++ benchmark's kIterativeTolerance -- verified this is the same convergence formula Eigen's setTolerance() uses, so a given value means the same thing on both sides")
     ap.add_argument("--check-every", type=int, default=0, help="0 disables host-side convergence checks (pure CUDA-graph replay, but no early exit without device-side conditional graphs); >0 enables early exit at the cost of host syncs")
     ap.add_argument("--csv", default=None, help="write results in the same schema as the C++ benchmark's --csv")
+    ap.add_argument("--reference-csv", default=None, help="C++ benchmark's own --csv output; when given, the diverged-vs-best check compares against the true best across ALL solvers on each k, not just Warp's own four")
     args = ap.parse_args()
+
+    reference = {}
+    if args.reference_csv:
+        with open(args.reference_csv) as f:
+            next(f)  # header
+            for line in f:
+                k, method, t_factor, t_solve, residual, skipped, fused = line.strip().split(",")
+                if skipped == "0":
+                    k = int(k)
+                    reference[k] = min(reference.get(k, float("inf")), float(residual))
 
     wp.init()
     device = args.device or ("cuda:0" if wp.get_cuda_device_count() > 0 else "cpu")
@@ -150,9 +205,12 @@ def main():
                 fn, A, Q, rhs, device, args.maxiter, args.tol, args.check_every
             )
             rows.append((name, t_factor, t_solve, residual))
-            if csv_f:
-                csv_f.write(f"{k},{name},{t_factor:.9g},{t_solve:.9g},{residual:.9g},0,0\n")
-        print_leaderboard(rows)
+        diverged = print_leaderboard(rows, reference.get(k))
+        diverged_names = {r[0] for r in diverged}
+        if csv_f:
+            for name, t_factor, t_solve, residual in rows:
+                skipped = 1 if name in diverged_names else 0
+                csv_f.write(f"{k},{name},{t_factor:.9g},{t_solve:.9g},{residual:.9g},{skipped},0\n")
 
     if csv_f:
         csv_f.close()
