@@ -136,10 +136,13 @@ static void record(
 // cap of twice the system size, which is effectively unbounded for a 720K-row
 // mesh: on the k=3 triharmonic system (documented above as badly scaled) they
 // can burn tens of minutes grinding through non-convergent iterations without
-// ever tripping any other limit. Cap iterations so a hard system shows up as
-// an honestly-reported large residual within a bounded time, not a hang.
-// SFINAE dispatch: direct solvers (LLT/LDLT/LU/...) have no setMaxIterations,
-// so the fallback (long) overload is selected for them and does nothing.
+// ever tripping any other limit. maxiter here is a SAFETY NET, not the
+// intended stopping criterion -- that's kIterativeTolerance below (see
+// set_tolerance()); this just bounds worst-case runtime on a system that
+// never converges (e.g. CG on a genuinely indefinite input, which it isn't
+// designed to handle) instead of letting it hang. SFINAE dispatch: direct
+// solvers (LLT/LDLT/LU/...) have no setMaxIterations, so the fallback (long)
+// overload is selected for them and does nothing.
 static const int kMaxIterativeIterations = 200;
 template <typename Factor>
 auto cap_iterations(Factor & factor, int) -> decltype(factor.setMaxIterations(0), void())
@@ -148,6 +151,27 @@ auto cap_iterations(Factor & factor, int) -> decltype(factor.setMaxIterations(0)
 }
 template <typename Factor>
 void cap_iterations(Factor &, long) {}
+
+// The actual intended stopping criterion for iterative solvers: relative L2
+// residual ||b-Ax||_2 / ||b||_2 < kIterativeTolerance (Eigen's own
+// setTolerance() semantics -- confirmed by reading ConjugateGradient.h's
+// convergence test, `residualNorm2 < tol*tol*rhsNorm2`). Warp's
+// warp.optim.linear solvers (see warp_bench/bench_warp.py's --tol, default
+// matches this) use the identical relative-L2 formula internally, so
+// kIterativeTolerance means the same thing to both -- verified by reading
+// both libraries' source, not assumed. Note this benchmark's own displayed
+// residual column is a DIFFERENT quantity (L-infinity, absolute) from this
+// internal L2-relative convergence test, so a converged row's displayed
+// residual won't literally equal kIterativeTolerance; see the README note
+// next to the leaderboard tables. SFINAE dispatch mirrors cap_iterations.
+static const double kIterativeTolerance = 1e-7;
+template <typename Factor>
+auto set_tolerance(Factor & factor, int) -> decltype(factor.setTolerance(0.0), void())
+{
+  factor.setTolerance(kIterativeTolerance);
+}
+template <typename Factor>
+void set_tolerance(Factor &, long) {}
 
 static const char * eigen_info_string(Eigen::ComputationInfo info)
 {
@@ -173,6 +197,7 @@ void solve(
   Timer timer;
   Factor factor;
   cap_iterations(factor, 0);
+  set_tolerance(factor, 0);
   factor.compute(Q);
   const double t_factor = timer.toc();
   // Only gate on info() for the mixed/indefinite systems (k>=4): there,
