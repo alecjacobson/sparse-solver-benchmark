@@ -465,6 +465,48 @@ minifold mesh will be 7 non-zeros per row (on average).
 For k=3, the system can get really badly scaled and starts to become more dense
 (~40 non-zeros per row).
 
+### How is the L∞ norm computed, and why is it so large for k=3?
+
+The `L∞ norm` column is the residual's absolute max-component norm,
+`‖rhs − Q·U‖∞`, computed with `(rhs-Q*U).array().abs().maxCoeff()` in
+`main.cpp` — the single largest absolute error across *every* row and *every*
+right-hand-side column at once (`rhs = M*x` has 3 columns, the mesh's own
+x/y/z coordinates), not a per-column or relative quantity. It's **absolute**,
+not normalized by `‖rhs‖` or `‖Q‖` — deliberately, so it's the same metric
+for every solver regardless of algorithm, and comparable to the per-system
+`g_check_tol[]` correctness thresholds used by `--check`/CTest. It is *not*
+comparable across different k or between the flattened/mixed systems, whose
+residuals live at genuinely different scales (see below) — only within the
+same system, across solvers, is it apples-to-apples.
+
+k=3's residuals (tens to hundreds, vs. ~1e-10 for k=1) look alarming at a
+glance, but they're a direct, unavoidable consequence of `Wᵏ⁺¹ = Wᵏ M⁻¹ L`
+being applied recursively: each application inverts the mass matrix `M`
+again, and `M`'s entries scale with triangle area, so on a mesh with small
+triangles `M⁻¹`'s entries (and thus `Q`'s) can become enormous. Measured
+directly (via `--dump-matrices`, see above) on this README's two example
+meshes' own k=3 (flattened Triharmonic) systems:
+
+| Mesh | `Q`'s largest entry (abs) | `rhs`'s largest entry (abs) | Absolute residual | Residual ÷ `‖rhs‖∞` | Residual ÷ `‖Q‖∞` |
+|---|---:|---:|---:|---:|---:|
+| synthetic 20×20 grid | 1.8×10⁷ | 2.6×10⁻³ | 1.8×10⁻⁸ | 6.9×10⁻⁶ | **1.0×10⁻¹⁵** |
+| `xyzrgb_dragon-720K.ply` | **3.0×10¹⁵** | 1.3×10² | 47.9 | 0.37 | **1.6×10⁻¹⁴** |
+
+On the dragon mesh, `Q` has individual entries as large as 3×10¹⁵ — right at
+the edge of what a double (≈15-16 significant decimal digits) can represent
+alongside `Q`'s much smaller entries (as small as 2.8×10⁻⁸) in the same
+matrix. A residual of "47.9" looks large next to `rhs`'s own scale (~131),
+but relative to `Q`'s own scale it's ~1.6×10⁻¹⁴ — right at double-precision
+machine epsilon (~2.2×10⁻¹⁶) times `Q`'s magnitude. In other words: this is
+the floating-point roundoff floor imposed by `Q` containing such
+astronomically large entries, not an inaccurate solve — a mathematically
+exact solve, computed in double precision, would show essentially the same
+absolute residual, because the roundoff in forming `Q·U` itself scales with
+`Q`'s magnitude. `g_check_tol[3] = 1e3` (see `main.cpp`) was tuned
+empirically with exactly this in mind; the other flattened systems'
+comparatively tiny tolerances (`1e-4`, `1e-1`) reflect `Q` staying at a much
+saner scale for k=1,2.
+
 ### Mixed (unflattened) formulation
 
 The systems above are "flattened": `Wᵏ` is built by eliminating auxiliary
