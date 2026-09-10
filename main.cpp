@@ -191,8 +191,23 @@ void cap_iterations(Factor &, long) {}
 // residual column is a DIFFERENT quantity (L-infinity, absolute) from this
 // internal L2-relative convergence test, so a converged row's displayed
 // residual won't literally equal kIterativeTolerance; see the README note
-// next to the leaderboard tables. SFINAE dispatch mirrors cap_iterations.
-static const double kIterativeTolerance = 1e-7;
+// next to the leaderboard tables.
+//
+// This was 1e-7 until it was empirically found (verified with a diagnostic
+// script comparing Warp's internally-tracked residual against an
+// independently recomputed one -- no drift, both agreed exactly) that a
+// 1e-7 *relative L2* target can still leave a much larger *absolute L∞*
+// residual on a large vector when the residual isn't evenly distributed
+// across components: on the real dragon mesh's 360K-row harmonic system,
+// ||b||_2 (3824) is ~30x ||b||_inf (130), and 1e-7 relative-L2 converged to
+// an absolute L∞ of only 1.5e-4. Tightening to 1e-10 got close (1.5-2.8e-7
+// across cg/cr/bicgstab/gmres) but still landed on the wrong side of a
+// clean 1e-7 target for some solvers/columns; 1e-11 gives solid margin
+// (measured 9.4e-9 on the same case) at still-negligible extra cost (730
+// iterations vs. 549 at 1e-7, both well under a second) since CG's
+// iteration count grows only mildly per decade of tolerance on
+// well-conditioned systems. SFINAE dispatch mirrors cap_iterations.
+static const double kIterativeTolerance = 1e-11;
 template <typename Factor>
 auto set_tolerance(Factor & factor, int) -> decltype(factor.setTolerance(0.0), void())
 {

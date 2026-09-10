@@ -43,7 +43,7 @@ solvers can't handle at all, and a couple can't even handle *gracefully* (see
 > - **Eigen's iterative solvers** (BiCGSTAB/CG + IncompleteLUT) get
 >   unreliable as k grows and are unreliable on indefinite systems (CG in
 >   particular, since it assumes SPD). They now stop at a **relative L2
->   residual tolerance of 1e-7** (`‖b−Ax‖₂ < 1e-7·‖b‖₂`, via `setTolerance()`)
+>   residual tolerance of 1e-11** (`‖b−Ax‖₂ < 1e-11·‖b‖₂`, via `setTolerance()`)
 >   — the actual intended stopping criterion — with a deliberately generous
 >   20000-iteration cap and a **10-minute wall-clock time limit** as two
 >   independent safety nets against a system that never converges at all
@@ -61,14 +61,19 @@ solvers can't handle at all, and a couple can't even handle *gracefully* (see
 >   being cut off with no time guarantee at all. `warp_bench/` uses the
 >   identical relative-L2 tolerance formula and the same 10-minute limit
 >   (chunked the same way), verified by reading both libraries' source, so a
->   comparison between them is apples-to-apples.
+>   comparison between them is apples-to-apples. `1e-11` (not the more
+>   obvious-looking `1e-7`) because the relative-L2 criterion and the L∞
+>   absolute residual this benchmark displays aren't the same quantity, and
+>   on a large vector with unevenly-distributed error the gap between them
+>   can be substantial — see "How is the L∞ norm computed?" below for the
+>   measured numbers that drove this choice.
 > - **Eigen SparseLU**¹ is the slowest general-purpose solver by a wide
 >   margin, as expected — but see the ⚠️ note below if you see it apparently
 >   taking *minutes* instead of seconds, that's a build misconfiguration, not
 >   real solver cost.
 > - **NVIDIA Warp**'s `warp.optim.linear` solvers (`cg`/`cr`/`bicgstab`/
 >   `gmres`, timed separately via [`warp_bench/`](warp_bench/)) run to the
->   same `1e-7` relative tolerance as Eigen's iterative solvers, but with
+>   same `1e-11` relative tolerance as Eigen's iterative solvers, but with
 >   only Jacobi preconditioning (the strongest Warp currently offers — Eigen
 >   uses incomplete-LU, meaningfully stronger) and the same 20000-iteration/
 >   10-minute safety nets. At this mesh's real scale (360K-2.16M rows), that
@@ -398,7 +403,7 @@ solver itself reported success. This catches genuine silent failures like
 cuDSS's on the mixed triharmonic system (see ⚠️ below) as well as iterative
 solvers that hit their iteration cap without reaching tolerance — both
 Eigen's BiCGSTAB/CG and Warp's `cg`/`cr`/`bicgstab`/`gmres` now run to a real
-relative-L2 tolerance of `1e-7` (not just an iteration cap; see the ⚠️ note
+relative-L2 tolerance of `1e-11` (not just an iteration cap; see the ⚠️ note
 below) but can still fail to reach it on a large-enough or hard-enough
 system, which is exactly what most of the `warp::*` rows above show: at this
 mesh's scale (360K-2.16M rows) and with only Jacobi preconditioning (the
@@ -506,6 +511,26 @@ absolute residual, because the roundoff in forming `Q·U` itself scales with
 empirically with exactly this in mind; the other flattened systems'
 comparatively tiny tolerances (`1e-4`, `1e-1`) reflect `Q` staying at a much
 saner scale for k=1,2.
+
+#### Why is `kIterativeTolerance` 1e-11, not the more obvious-looking 1e-7?
+
+The iterative solvers' internal stopping criterion is a *relative L2*
+quantity (`‖b−Ax‖₂ < tol·‖b‖₂`), but the `L∞ norm` column above is an
+*absolute, max-component* quantity — not the same number, and on a large
+vector they can differ substantially if the residual error isn't spread
+evenly across components. Measured directly on the dragon mesh's Harmonic
+(k=1) system, `‖b‖₂` (3824) is ~30x `‖b‖∞` (130); at `tol=1e-7`, Warp's
+`cg` genuinely met that relative-L2 target (verified: its own
+internally-tracked residual and an independently recomputed one agreed
+exactly, so this isn't drift) while the resulting *absolute* L∞ residual
+was only `1.5e-4` — five orders of magnitude looser than `1e-7` might
+suggest. `tol=1e-10` narrowed the gap but still landed on the wrong side
+of a clean `1e-7` L∞ target for some solvers/columns (`1.5e-7`-`2.8e-7`
+across `cg`/`cr`/`bicgstab`/`gmres`); `tol=1e-11` gives solid margin
+(measured `9.4e-9`-`3.2e-8`) at negligible extra iteration cost (CG's
+iteration count grows only mildly per decade of tolerance on a
+well-conditioned system like this one — 730 iterations at `1e-11` vs. 549
+at `1e-7`, both well under a second).
 
 ### Mixed (unflattened) formulation
 
