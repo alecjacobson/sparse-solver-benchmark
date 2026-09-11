@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux (full solver matrix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache submodule builds
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: linux-build-${{ hashFiles('.gitmodules', 'CMakeLists.txt', 'main.cpp') }}-${{ github.sha }}
+          restore-keys: |
+            linux-build-${{ hashFiles('.gitmodules', 'CMakeLists.txt', 'main.cpp') }}-
+            linux-build-
+
+      - name: Add NVIDIA CUDA apt repo
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          rm cuda-keyring_1.1-1_all.deb
+
+      - name: Install base build dependencies
+        run: |
+          sudo add-apt-repository -y multiverse
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            build-essential gfortran libblas-dev liblapack-dev
+
+      - name: Install Intel MKL
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libmkl-full-dev
+
+      - name: Install NVIDIA CUDA toolkit + cuDSS
+        # Same package set installed and verified locally on the L40 dev
+        # machine (see README): nvcc + cudart + cublas/cusolver/cusparse
+        # headers, plus cuDSS itself. libnvjitlink is a runtime dependency of
+        # libcusparse/libcusolver (undefined __nvJitLink* symbols at link
+        # time otherwise) that happened to already be present on the dev
+        # machine from unrelated tooling, so install it explicitly here.
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            cuda-nvcc-12-6 cuda-cudart-dev-12-6 libcublas-dev-12-6 \
+            libcusolver-dev-12-6 libcusparse-dev-12-6 libnvjitlink-12-6 \
+            libcudss0-dev-cuda-12 libcudss0-cuda-12
+
+      - name: Configure
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DIGL_WITH_CHOLMOD=ON -DIGL_WITH_MKL=ON -DIGL_WITH_GPL=ON -DIGL_WITH_CUDSS=ON
+
+      - name: Build
+        run: cmake --build build -j4
+
+      - name: Test
+        # No GPU on hosted runners: cuDSS/cuSOLVER compile here but the
+        # binary detects the missing CUDA device at runtime and skips those
+        # rows, so ctest still exercises every other solver end-to-end.
+        run: ctest --test-dir build --output-on-failure
+
+  windows:
+    name: Windows (Eigen + CHOLMOD/UMFPACK)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install OpenBLAS/LAPACK via vcpkg
+        run: |
+          vcpkg install openblas lapack-reference --triplet x64-windows
+
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows
+          -DIGL_WITH_CHOLMOD=ON -DIGL_WITH_MKL=OFF -DIGL_WITH_GPL=ON -DIGL_WITH_CUDSS=OFF
+
+      - name: Build
+        run: cmake --build build --config Release -j4
+
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+  macos:
+    name: macOS (Eigen + CHOLMOD/UMFPACK via Accelerate)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        # BLAS/LAPACK come from the Accelerate framework (no Homebrew
+        # SuiteSparse needed: the SuiteSparse submodule is built from source
+        # against Accelerate, same as the Linux/Windows jobs build it from
+        # source against MKL/OpenBLAS).
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DIGL_WITH_CHOLMOD=ON -DIGL_WITH_MKL=OFF -DIGL_WITH_GPL=ON -DIGL_WITH_CUDSS=OFF
+
+      - name: Build
+        run: cmake --build build -j4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
