@@ -68,7 +68,7 @@ struct Result
   // the leaderboard can print "(fused)" instead of a misleading "0 secs".
   bool fused_factor = false;
   // True when an iterative solver hit kIterativeTimeLimitSeconds before
-  // reaching kIterativeTolerance or kMaxIterativeIterations -- the row still
+  // reaching kBackwardErrorTarget or kMaxIterativeIterations -- the row still
   // reports its best-effort accuracy at cutoff (not skipped), but the
   // leaderboard marks it so a fast-but-inaccurate time-limited result isn't
   // read as a genuinely converged one. iterations_used is -1 for solvers
@@ -80,12 +80,6 @@ struct Result
 static std::vector<Result> g_results;
 static FILE * g_csv = nullptr;
 static bool g_check_mode = false;
-// Looser tolerance for higher k: the k-harmonic systems get increasingly
-// ill-conditioned/dense (see README), so residuals legitimately grow with k.
-// Index 0 unused, 1-3 are the flattened Harmonic/Biharmonic/Triharmonic
-// systems, 4-5 are the mixed (unflattened, indefinite) Biharmonic/
-// Triharmonic systems (tolerances tuned empirically, see verification notes).
-static double g_check_tol[6] = {0, 1e-4, 1e-1, 1e3, 1e-1, 1};
 static bool g_check_failed = false;
 
 // --only/--exclude: case-insensitive substring filters on solver name, so
@@ -146,81 +140,78 @@ static void record(
   // correctness regression. See print_leaderboard() for the actual check.
 }
 
+// Componentwise relative backward error (LAPACK's BERR): the smallest
+// relative, entrywise perturbation of A and b that would make the computed
+// X an *exact* solution --
+//
+//   eta_cw = max_ij |B-AX|_ij / (|A||X|+|B|)_ij
+//
+// This replaces a plain absolute residual (||B-AX||) as this benchmark's
+// accuracy metric because it's naturally scale-invariant: it correctly
+// reports a near-machine-precision result even when A has astronomically
+// large entries (see the k=3/triharmonic README note -- an absolute
+// residual around 48 there is actually excellent once you account for A's
+// 3e15-magnitude entries) or wildly different row scales (as in the mixed
+// systems' M/L blocks), because the denominator is formed with the same
+// arithmetic -- and thus subject to the same rounding -- that produced the
+// residual in the numerator. |A| means entrywise absolute value here, not
+// an induced matrix norm; |A|*|X| is a single sparse-times-dense product
+// with the same sparsity pattern as A (no dense matrix ever formed),
+// O(nnz(A)*ncols(X)) -- the same complexity class as computing A*X itself.
+static double backward_error(
+  const Eigen::SparseMatrix<double> & Q,
+  const Eigen::MatrixXd & rhs,
+  const Eigen::MatrixXd & U)
+{
+  const Eigen::MatrixXd R = (rhs - Q*U).cwiseAbs();
+  Eigen::MatrixXd D = rhs.cwiseAbs();
+  for(int c=0; c<Q.outerSize(); ++c)
+  {
+    for(Eigen::SparseMatrix<double>::InnerIterator it(Q,c); it; ++it)
+    {
+      // Column-major traversal: it.col() is the fixed outer index j, it.row()
+      // the inner index i -- i.e. this nonzero is Q(i,j), contributing
+      // |Q(i,j)|*|U(j,:)| to D's row i.
+      D.row(it.row()).array() += std::abs(it.value()) * U.row(it.col()).array().abs();
+    }
+  }
+  // LAPACK convention: floor the denominator instead of dividing by exactly
+  // zero, which only happens for a row where A, x, and b are all exactly
+  // zero (the ratio there is definitionally 0/0 -- treat it as perfectly
+  // solved, not NaN/Inf).
+  return (R.array() / D.cwiseMax(std::numeric_limits<double>::min()).array()).maxCoeff();
+}
+
 // Iterative solvers (BiCGSTAB/ConjugateGradient) default to Eigen's built-in
 // cap of twice the system size, which is effectively unbounded for a 720K-row
 // mesh: on the k=3 triharmonic system (documented above as badly scaled) they
 // can burn tens of minutes grinding through non-convergent iterations without
 // ever tripping any other limit. maxiter here is a SAFETY NET, not the
-// intended stopping criterion -- that's kIterativeTolerance below (see
-// set_tolerance()); this just bounds worst-case runtime on a system that
-// never converges (e.g. CG on a genuinely indefinite input, which it isn't
-// designed to handle) instead of letting it hang.
-//
-// This used to be 200, which in practice made the iteration cap the real
-// stopping criterion for anything but the smallest/best-conditioned
-// systems -- kIterativeTolerance was set but rarely actually reached before
-// hitting the cap, so different solvers ended up compared at different,
-// incidental accuracies rather than the uniform target tolerance. Raised
-// deliberately high so a solver that CAN reach kIterativeTolerance
-// (whatever that takes) actually does, at the cost of longer runs on
-// systems that still can't converge even given a very generous budget
-// (e.g. CG on indefinite input) -- this remains only a backstop against
-// those never terminating, not a limit expected to bind on well-behaved
-// systems.
-//
-// SFINAE dispatch: direct solvers (LLT/LDLT/LU/...) have no
-// setMaxIterations, so the fallback (long) overload is selected for them
-// and does nothing.
+// intended stopping criterion -- that's kBackwardErrorTarget below; this just
+// bounds worst-case runtime on a system that never converges (e.g. CG on a
+// genuinely indefinite input, which it isn't designed to handle) instead of
+// letting it hang.
 static const int kMaxIterativeIterations = 20000;
-template <typename Factor>
-auto cap_iterations(Factor & factor, int) -> decltype(factor.setMaxIterations(0), void())
-{
-  factor.setMaxIterations(kMaxIterativeIterations);
-}
-template <typename Factor>
-void cap_iterations(Factor &, long) {}
 
-// The actual intended stopping criterion for iterative solvers: relative L2
-// residual ||b-Ax||_2 / ||b||_2 < kIterativeTolerance (Eigen's own
-// setTolerance() semantics -- confirmed by reading ConjugateGradient.h's
-// convergence test, `residualNorm2 < tol*tol*rhsNorm2`). Warp's
-// warp.optim.linear solvers (see warp_bench/bench_warp.py's --tol, default
-// matches this) use the identical relative-L2 formula internally, so
-// kIterativeTolerance means the same thing to both -- verified by reading
-// both libraries' source, not assumed. Note this benchmark's own displayed
-// residual column is a DIFFERENT quantity (L-infinity, absolute) from this
-// internal L2-relative convergence test, so a converged row's displayed
-// residual won't literally equal kIterativeTolerance; see the README note
-// next to the leaderboard tables.
-//
-// This was 1e-7 until it was empirically found (verified with a diagnostic
-// script comparing Warp's internally-tracked residual against an
-// independently recomputed one -- no drift, both agreed exactly) that a
-// 1e-7 *relative L2* target can still leave a much larger *absolute L∞*
-// residual on a large vector when the residual isn't evenly distributed
-// across components: on the real dragon mesh's 360K-row harmonic system,
-// ||b||_2 (3824) is ~30x ||b||_inf (130), and 1e-7 relative-L2 converged to
-// an absolute L∞ of only 1.5e-4. Tightening to 1e-10 got close (1.5-2.8e-7
-// across cg/cr/bicgstab/gmres) but still landed on the wrong side of a
-// clean 1e-7 target for some solvers/columns; 1e-11 gives solid margin
-// (measured 9.4e-9 on the same case) at still-negligible extra cost (730
-// iterations vs. 549 at 1e-7, both well under a second) since CG's
-// iteration count grows only mildly per decade of tolerance on
-// well-conditioned systems. SFINAE dispatch mirrors cap_iterations.
-static const double kIterativeTolerance = 1e-11;
-template <typename Factor>
-auto set_tolerance(Factor & factor, int) -> decltype(factor.setTolerance(0.0), void())
-{
-  factor.setTolerance(kIterativeTolerance);
-}
-template <typename Factor>
-void set_tolerance(Factor &, long) {}
+// The actual intended stopping criterion for iterative solvers: componentwise
+// relative backward error (see backward_error() above) under this target,
+// checked directly -- an EXTERNAL common target applied the same way to
+// every iterative solver here (Eigen's and Warp's, see warp_bench/bench_warp.py's
+// --berr-target), rather than trusting each library's own internal
+// convergence criterion. This matters because internal criteria differ in
+// both norm (Eigen's setTolerance()/Warp's tol= are both relative-L2, not
+// backward error) and, more importantly, in what they're relative TO --
+// letting each library privately decide "solved" would time solvers at
+// whatever accuracy their own default happens to land on, not a comparable
+// one. Direct solvers have no notion of a target to iterate toward; they
+// solve once and simply report whatever backward error they achieve.
+static const double kBackwardErrorTarget = 1e-8;
 
 // kMaxIterativeIterations (20000) alone turned out to be impractical as the
 // sole backstop: on the real dragon mesh, Eigen::CG on the badly-scaled
 // flattened triharmonic system was observed (via gdb, confirming it was
 // genuinely still computing, not hung) to run for multiple *hours* without
-// reaching either the tolerance or the iteration cap. A pure iteration cap
+// reaching either the target or the iteration cap. A pure iteration cap
 // can't bound wall-clock time when a system is this much harder than
 // smaller test cases suggested. Add an actual wall-clock deadline: for
 // iterative solvers, solve in chunks via solveWithGuess() (continuing from
@@ -231,11 +222,13 @@ void set_tolerance(Factor &, long) {}
 // being cut off at an arbitrary iteration count with no time guarantee.
 static const double kIterativeTimeLimitSeconds = 600.0; // 10 minutes
 
-// SFINAE dispatch mirrors cap_iterations/set_tolerance: only types with
-// solveWithGuess() (Eigen's iterative solvers) get the chunked/timed path;
-// direct solvers fall through to a single plain solve() call.
+// SFINAE dispatch: only types with solveWithGuess() (Eigen's iterative
+// solvers) get the chunked/timed path; direct solvers fall through to a
+// single plain solve() call. Q is needed (in addition to rhs) because the
+// per-chunk stopping check is backward_error(Q, rhs, x), not anything
+// Eigen's own factor object tracks internally.
 template <typename Factor>
-auto solve_rhs(Factor & factor, const Eigen::MatrixXd & rhs, bool & timed_out, int & iterations_used, int)
+auto solve_rhs(Factor & factor, const Eigen::SparseMatrix<double> & Q, const Eigen::MatrixXd & rhs, bool & timed_out, int & iterations_used, int)
   -> decltype(factor.solveWithGuess(rhs, rhs), Eigen::MatrixXd())
 {
   timed_out = false;
@@ -258,12 +251,9 @@ auto solve_rhs(Factor & factor, const Eigen::MatrixXd & rhs, bool & timed_out, i
     // actually happened, converged or not. Track our own upper-bound
     // instead: since setMaxIterations(chunk) caps each column's iteration
     // count, "chunk" itself is what a non-converged call actually spent
-    // (this is an approximation when some columns converge before others,
-    // but the alternative -- trusting iterations(), which was silently
-    // always 0 -- meant this loop's cap-based termination check never
-    // fired at all, so it only ever stopped via the wall-clock deadline).
+    // (this is an approximation when some columns converge before others).
     iterations_used += chunk;
-    if(factor.info() == Eigen::Success || iterations_used >= kMaxIterativeIterations) break;
+    if(backward_error(Q,rhs,x) < kBackwardErrorTarget || iterations_used >= kMaxIterativeIterations) break;
     const double now = igl::get_seconds();
     if(now >= deadline) { timed_out = true; break; }
     // Adapt the next chunk size toward ~5s of work (or however much time is
@@ -287,7 +277,7 @@ auto solve_rhs(Factor & factor, const Eigen::MatrixXd & rhs, bool & timed_out, i
   return x;
 }
 template <typename Factor>
-Eigen::MatrixXd solve_rhs(Factor & factor, const Eigen::MatrixXd & rhs, bool & timed_out, int & iterations_used, long)
+Eigen::MatrixXd solve_rhs(Factor & factor, const Eigen::SparseMatrix<double> &, const Eigen::MatrixXd & rhs, bool & timed_out, int & iterations_used, long)
 {
   timed_out = false;
   iterations_used = -1;
@@ -317,8 +307,6 @@ void solve(
   if(!should_run(name)) return;
   Timer timer;
   Factor factor;
-  cap_iterations(factor, 0);
-  set_tolerance(factor, 0);
   factor.compute(Q);
   const double t_factor = timer.toc();
   // Only gate on info() for the mixed/indefinite systems (k>=4): there,
@@ -337,9 +325,9 @@ void solve(
   }
   bool timed_out = false;
   int iterations_used = -1;
-  U = solve_rhs(factor, rhs, timed_out, iterations_used, 0);
+  U = solve_rhs(factor, Q, rhs, timed_out, iterations_used, 0);
   const double t_solve = timer.toc();
-  record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff(),
+  record(k, name, t_factor, t_solve, backward_error(Q,rhs,U),
     false, "", false, timed_out, iterations_used);
 }
 
@@ -399,7 +387,7 @@ void solve<catamari::SparseLDL<double>>(
       U(i,j) = right_hand_sides(i, j);
     }
   }
-  record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff());
+  record(k, name, t_factor, t_solve, backward_error(Q,rhs,U));
 }
 
 #ifdef IGL_WITH_CUDSS
@@ -577,7 +565,7 @@ void solve_cudss(
 
   cleanup();
 
-  record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff());
+  record(k, name, t_factor, t_solve, backward_error(Q,rhs,U));
 }
 
 // cusolverSpDcsrlsvchol fuses reordering + symbolic + numeric factorization +
@@ -634,7 +622,7 @@ void solve_cusolver(
   CUSPARSE_CHECK(cusparseDestroyMatDescr(descr));
   CUSOLVER_CHECK(cusolverSpDestroy(handle));
 
-  record(k, name, 0, t_solve, (rhs-Q*U).array().abs().maxCoeff(),
+  record(k, name, 0, t_solve, backward_error(Q,rhs,U),
     /*skipped=*/false, /*skip_reason=*/"", /*fused_factor=*/true);
 }
 
@@ -758,7 +746,7 @@ void solve_catamari_ldl(
       U(i,j) = right_hand_sides(i, j);
     }
   }
-  record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff());
+  record(k, name, t_factor, t_solve, backward_error(Q,rhs,U));
 }
 
 #ifdef IGL_WITH_NASOQ
@@ -847,7 +835,7 @@ void solve_nasoq_lbl(
   omp_set_num_threads(prev_omp_threads);
 #endif
 
-  record(k, name, t_factor, t_solve, (rhs-Q*U).array().abs().maxCoeff());
+  record(k, name, t_factor, t_solve, backward_error(Q,rhs,U));
 }
 #endif
 
@@ -928,60 +916,46 @@ static std::string machine_info()
 // in this version), which can't find a safe pivot in a block that's
 // structurally all-zero on the diagonal (this system's λ block) -- so
 // rather than trust any solver's own success signal, reclassify any row
-// whose residual is enormous relative to the best solver actually achieved
-// on this same system as "didn't actually succeed", moving it to the
-// skipped section instead of letting it rank with a misleadingly-real-looking
-// number. Applies uniformly, including iterative solvers (Eigen's
-// BiCGSTAB/CG, Warp's cg/cr/bicgstab/gmres): those are configured to run to
-// a real tolerance now (kIterativeTolerance), not just an iteration cap, so
-// if one still comes back with a huge residual, that's a genuine failure to
-// converge worth surfacing the same way, not something to quietly rank.
-static const double kDivergedFactor = 1e6;
-static const double kDivergedFloor = 1e-3;
-// On the flattened triharmonic system, even a genuinely-converged solve can
-// legitimately have a residual in the hundreds (see the "badly scaled"
-// note below) -- so on a hard system where the best achieved residual is
-// itself already large, kDivergedFactor alone produces an enormous
-// threshold that lets truly nonsensical answers (e.g. residual ~1e6) slip
-// through uncaught. Cap the threshold at this absolute value regardless of
-// how large the best residual is; chosen well above the worst *legitimate*
-// residual observed on the real dragon mesh (~150, SparseLU/CG on the
-// flattened triharmonic system) with headroom to spare.
-static const double kDivergedAbsoluteCap = 1e4;
+// whose backward error exceeds this bar as "didn't actually succeed",
+// moving it to the skipped section instead of letting it rank with a
+// misleadingly-real-looking number.
+//
+// Because backward error is scale-invariant (see backward_error() above),
+// unlike the old absolute-residual metric this benchmark used to report,
+// a SINGLE fixed threshold works uniformly across every system here --
+// flattened or mixed, k=1 or k=5 -- rather than needing a per-k tolerance
+// tuned empirically to each system's own residual scale (this used to be a
+// 6-entry table, g_check_tol[], ranging from 1e-4 to 1e3; a real double-
+// precision solve's backward error sits near machine epsilon (~1e-16)
+// regardless of k, so one bar comfortably separates "solved" from "not").
+// Also used directly as --check's correctness bar (see below), for the
+// same reason: no per-k tuning needed anymore.
+static const double kBackwardErrorDivergedThreshold = 1e-6;
 
 static void print_leaderboard(int k)
 {
   std::vector<Result> rows;
   for(const auto & r : g_results) if(r.k==k) rows.push_back(r);
 
-  // NaN comparisons are always false (IEEE 754), so `nan > threshold` and
-  // `nan < min_residual` both silently evaluate to false rather than
-  // flagging a diverged solve -- without an explicit isnan() check here, a
-  // solver that returned NaN (e.g. Eigen::CG genuinely diverging on an
-  // indefinite system) would slip through this whole reclassification
-  // untouched and could even rank #1, having accidentally never lost a `<`
-  // comparison to anything. Exclude NaN from the "best" computation and
-  // unconditionally treat it as a failure below, no threshold needed.
-  double min_residual = std::numeric_limits<double>::infinity();
-  for(const auto & r : rows) if(!r.skipped && !std::isnan(r.residual)) min_residual = std::min(min_residual, r.residual);
-  const bool have_reference = std::isfinite(min_residual);
-  const double threshold = have_reference
-    ? std::min(std::max(min_residual*kDivergedFactor, kDivergedFloor), kDivergedAbsoluteCap)
-    : 0.0;
+  // NaN comparisons are always false (IEEE 754): `nan > threshold` silently
+  // evaluates to false rather than flagging a diverged solve, so a solver
+  // that returned NaN (e.g. Eigen::CG genuinely diverging on an indefinite
+  // system) needs an explicit isnan() check rather than relying on the
+  // threshold comparison to catch it.
   for(auto & r : rows)
   {
     if(r.skipped) continue;
     if(std::isnan(r.residual))
     {
       r.skipped = true;
-      r.skip_reason = "did not actually succeed: L∞ residual is NaN (solver diverged)";
+      r.skip_reason = "did not actually succeed: backward error is NaN (solver diverged)";
     }
-    else if(have_reference && r.residual > threshold)
+    else if(r.residual > kBackwardErrorDivergedThreshold)
     {
       char buf[256];
       snprintf(buf,sizeof(buf),
-        "did not actually succeed: L%s residual %.4g is %.3g x the best solver's (%.4g) on this system",
-        "∞",r.residual,r.residual/min_residual,min_residual);
+        "did not actually succeed: backward error %.4g exceeds %.4g",
+        r.residual,kBackwardErrorDivergedThreshold);
       r.skipped = true;
       r.skip_reason = buf;
     }
@@ -991,15 +965,19 @@ static void print_leaderboard(int k)
   // it only ever judges results we're still treating as legitimate --
   // anything already caught as "did not actually succeed" (including NaN)
   // is a known, expected non-result (e.g. CG on an indefinite system),
-  // not a correctness regression to fail the build over.
+  // not a correctness regression to fail the build over. Since the
+  // reclassification above already applies this exact same threshold,
+  // this loop in practice only ever fires for bugs in the reclassification
+  // logic itself -- kept as a second, explicit check rather than assuming
+  // that invariant always holds.
   if(g_check_mode)
   {
     for(const auto & r : rows)
     {
-      if(!r.skipped && !(r.residual <= g_check_tol[k]))
+      if(!r.skipped && !(r.residual <= kBackwardErrorDivergedThreshold))
       {
-        fprintf(stderr,"CHECK FAILED: k=%d %s residual=%.6g exceeds tolerance %.6g\n",
-          k, r.name.c_str(), r.residual, g_check_tol[k]);
+        fprintf(stderr,"CHECK FAILED: k=%d %s backward_error=%.6g exceeds %.6g\n",
+          k, r.name.c_str(), r.residual, kBackwardErrorDivergedThreshold);
         g_check_failed = true;
       }
     }
@@ -1012,8 +990,8 @@ static void print_leaderboard(int k)
   });
 
   printf("\n");
-  printf("| Rank |                          Method |      Factor |       Solve |     L∞ norm |\n");
-  printf("|-----:|--------------------------------:|------------:|------------:|------------:|\n");
+  printf("| Rank |                          Method |      Factor |       Solve | Backward error |\n");
+  printf("|-----:|--------------------------------:|------------:|------------:|----------------:|\n");
   int rank = 0;
   bool any_fused = false;
   bool any_timed_out = false;
@@ -1026,10 +1004,11 @@ static void print_leaderboard(int k)
     }
     rank++;
     const char * medal = rank==1 ? "\U0001F947" : rank==2 ? "\U0001F948" : rank==3 ? "\U0001F949" : "  ";
-    // A timed-out row's residual is a snapshot at the kIterativeTimeLimitSeconds
-    // cutoff, not a converged result -- mark it with a dagger (and a
-    // footnote, matching the existing "(fused)*" pattern) rather than let it
-    // read as equivalent to a genuinely converged row's number.
+    // A timed-out row's backward error is a snapshot at the
+    // kIterativeTimeLimitSeconds cutoff, not a converged result -- mark it
+    // with a dagger (and a footnote, matching the existing "(fused)*"
+    // pattern) rather than let it read as equivalent to a genuinely
+    // converged row's number.
     std::string display_name = r.name;
     if(r.timed_out)
     {
@@ -1039,12 +1018,12 @@ static void print_leaderboard(int k)
     if(r.fused_factor)
     {
       any_fused = true;
-      printf("| %s%2d | %32s |     (fused)* | %8.2g secs | %11.6g |\n",
+      printf("| %s%2d | %32s |     (fused)* | %8.2g secs | %15.6g |\n",
         medal,rank,display_name.c_str(),r.t_solve,r.residual);
     }
     else
     {
-      printf("| %s%2d | %32s | %8.2g secs | %8.2g secs | %11.6g |\n",
+      printf("| %s%2d | %32s | %8.2g secs | %8.2g secs | %15.6g |\n",
         medal,rank,display_name.c_str(),r.t_factor,r.t_solve,r.residual);
     }
   }
@@ -1057,7 +1036,7 @@ static void print_leaderboard(int k)
   {
     printf("\n\xe2\x80\xa0 hit the %.0f-minute iterative-solver time limit before reaching\n",
       kIterativeTimeLimitSeconds/60.0);
-    printf(" kIterativeTolerance -- residual is a snapshot at cutoff, not a converged result.\n");
+    printf(" kBackwardErrorTarget -- backward error is a snapshot at cutoff, not a converged result.\n");
   }
   printf("\n");
 }
@@ -1131,7 +1110,7 @@ int main(int argc, char * argv[])
   if(!csv_path.empty())
   {
     g_csv = fopen(csv_path.c_str(),"w");
-    fprintf(g_csv,"k,method,factor_secs,solve_secs,linf_residual,skipped,fused_factor,timed_out,iterations_used\n");
+    fprintf(g_csv,"k,method,factor_secs,solve_secs,backward_error,skipped,fused_factor,timed_out,iterations_used\n");
   }
 
   fprintf(stderr,"# %s\n",machine_info().c_str());

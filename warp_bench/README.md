@@ -22,19 +22,28 @@ alongside the dump.
 `bench_warp.py` is a [PEP 723](https://peps.python.org/pep-0723/) script
 (`uv run` resolves `warp-lang`/`scipy`/`numpy` automatically, no venv setup
 needed). Add `--csv results.csv` to get output in the same schema as the C++
-benchmark's own `--csv` (`k,method,factor_secs,solve_secs,linf_residual,
-skipped,fused_factor`), so results from both sides can be concatenated into
-one table.
+benchmark's own `--csv` (`k,method,factor_secs,solve_secs,backward_error,
+skipped,fused_factor,timed_out,iterations_used`), so results from both sides
+can be concatenated into one table.
 
-## Fairness / timing methodology
+## Accuracy metric and fairness / timing methodology
 
-See the docstring at the top of `bench_warp.py` for the full rationale. In
-short: each solver gets one untimed warm-up call to absorb Warp's kernel JIT
-compilation and CUDA-graph capture (both one-time-per-process costs, not
-representative of steady-state solve cost), then the timed call is
-bracketed by a single `wp.synchronize()` before and after -- no host syncs
-inside the solve itself, matching `check_every=0` (the default here), which
-runs the whole solve as one CUDA-graph replay.
+Accuracy is reported as componentwise relative backward error (LAPACK's
+BERR), computed the same way as the C++ side's `backward_error()` in
+`main.cpp` -- see the main README's "How is accuracy measured?" section for
+the full rationale (short version: it's scale-invariant, so a single fixed
+threshold works for every system here, unlike an absolute residual).
+
+Iterative solvers are driven toward `--berr-target` (default `1e-8`),
+checked externally after every chunk of a time-boxed, warm-started solve --
+not via Warp's own internal `tol=` convergence test, since comparable
+accuracy across solvers/libraries requires one shared external target, not
+each library's private notion of "converged". This does mean a host sync
+(and a backward-error computation via scipy) every chunk, not zero host
+syncs during the whole solve -- see the docstring at the top of
+`bench_warp.py` for the rest of the timing methodology (warm-up call to
+absorb JIT/CUDA-graph-capture cost, `wp.synchronize()` bracketing, etc.),
+which otherwise still applies.
 
 ## Why a separate add-on instead of wiring this into the C++ binary?
 
