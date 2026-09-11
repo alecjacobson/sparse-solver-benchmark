@@ -276,23 +276,23 @@ produces:
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |                         warp::cr |  0.00021 secs |     0.35 secs |     4.72436e-15 |
-| 🥈 2 |                         warp::cg |  0.00021 secs |     0.38 secs |     1.00714e-14 |
-| 🥉 3 |            Eigen::SimplicialLDLT |      1.2 secs |     0.12 secs |     2.44563e-15 |
-|    4 |                   warp::bicgstab |  0.00024 secs |      1.3 secs |     1.28732e-14 |
-|    5 |             Eigen::SimplicialLLT |      1.2 secs |     0.11 secs |     2.97441e-15 |
-|    6 |              catamari::SparseLDL |      1.4 secs |     0.11 secs |     1.34635e-15 |
-|    7 |                     NVIDIA cuDSS |      2.5 secs |   0.0084 secs |      7.5799e-16 |
+| 🥇 1 |                         warp::cr |   0.0002 secs |     0.33 secs |     4.72436e-15 |
+| 🥈 2 |                         warp::cg |  0.00022 secs |     0.33 secs |     1.00714e-14 |
+| 🥉 3 |            Eigen::SimplicialLDLT |      1.2 secs |     0.11 secs |     2.44563e-15 |
+|    4 |             Eigen::SimplicialLLT |      1.2 secs |     0.11 secs |     2.97441e-15 |
+|    5 |                   warp::bicgstab |  0.00021 secs |      1.3 secs |     1.28732e-14 |
+|    6 |              catamari::SparseLDL |      1.3 secs |     0.12 secs |     1.34635e-15 |
+|    7 |                     NVIDIA cuDSS |      2.2 secs |   0.0027 secs |     7.39891e-16 |
 |    8 |         Eigen::CG<IncompleteLUT> |      1.6 secs |      1.1 secs |     6.22174e-09 |
-|    9 |                        NASOQ LBL |      2.6 secs |     0.18 secs |     8.09439e-16 |
-|   10 |   Eigen::BiCGSTAB<IncompleteLUT> |      1.6 secs |      1.4 secs |     4.16213e-16 |
-|   11 |                Eigen::PardisoLLT |      3.4 secs |      1.1 secs |     2.91357e-16 |
-|   12 |               Eigen::PardisoLDLT |      3.3 secs |      1.4 secs |     3.07192e-16 |
-|   13 |                      warp::gmres |  0.00024 secs |      4.8 secs |     5.99556e-16 |
-|   14 |                  Eigen::SparseLU |        5 secs |     0.18 secs |     3.97062e-15 |
-|   15 |      Eigen::CholmodSupernodalLLT |      7.3 secs |     0.64 secs |     8.32449e-16 |
-|   16 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       10 secs |     1.10125e-15 |
-|   17 |                 Eigen::UmfPackLU |       30 secs |     0.59 secs |     3.31624e-16 |
+|    9 |                        NASOQ LBL |      2.6 secs |     0.21 secs |     8.09439e-16 |
+|   10 |   Eigen::BiCGSTAB<IncompleteLUT> |      1.6 secs |      1.3 secs |     4.16213e-16 |
+|   11 |                Eigen::PardisoLLT |      3.1 secs |     0.92 secs |     2.91357e-16 |
+|   12 |               Eigen::PardisoLDLT |        3 secs |      1.2 secs |     3.07192e-16 |
+|   13 |                      warp::gmres |  0.00025 secs |      4.6 secs |     5.99556e-16 |
+|   14 |                  Eigen::SparseLU |        5 secs |     0.22 secs |     3.97062e-15 |
+|   15 |      Eigen::CholmodSupernodalLLT |      7.5 secs |     0.63 secs |     8.32449e-16 |
+|   16 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |      9.1 secs |     1.10125e-15 |
+|   17 |                 Eigen::UmfPackLU |       29 secs |     0.59 secs |     3.31624e-16 |
 
 *(fused): this solver's API has no separate factor step; the whole
  analysis+factor+solve cost is reported under Solve instead.
@@ -301,22 +301,22 @@ produces:
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |      Eigen::CholmodSupernodalLLT |      2.6 secs |     0.25 secs |     3.20597e-15 |
-| 🥈 2 |                     NVIDIA cuDSS |      4.6 secs |    0.019 secs |     2.29511e-14 |
-| 🥉 3 |                        NASOQ LBL |      5.3 secs |     0.29 secs |     2.31509e-14 |
-|    4 |               Eigen::PardisoLDLT |      5.1 secs |      1.3 secs |     1.42369e-15 |
-|    5 |                Eigen::PardisoLLT |      5.5 secs |      1.2 secs |     1.40062e-15 |
-|    6 |                 Eigen::UmfPackLU |      5.4 secs |      2.2 secs |     4.44457e-16 |
-|    7 |            Eigen::SimplicialLDLT |        9 secs |      0.4 secs |     4.24456e-15 |
+| 🥇 1 |      Eigen::CholmodSupernodalLLT |      2.2 secs |     0.27 secs |     3.20597e-15 |
+| 🥈 2 |                     NVIDIA cuDSS |      4.3 secs |    0.008 secs |      2.3126e-14 |
+| 🥉 3 |                        NASOQ LBL |      5.3 secs |      0.3 secs |     2.31509e-14 |
+|    4 |                Eigen::PardisoLLT |        5 secs |      1.1 secs |     1.40062e-15 |
+|    5 |               Eigen::PardisoLDLT |        5 secs |      1.2 secs |     1.42369e-15 |
+|    6 |                 Eigen::UmfPackLU |      5.4 secs |      1.9 secs |     4.44457e-16 |
+|    7 |            Eigen::SimplicialLDLT |      9.1 secs |      0.4 secs |     4.24456e-15 |
 |    8 |             Eigen::SimplicialLLT |      9.1 secs |     0.39 secs |     1.12776e-14 |
-|    9 |              catamari::SparseLDL |       11 secs |      0.4 secs |     7.11499e-15 |
+|    9 |              catamari::SparseLDL |       11 secs |     0.36 secs |     7.11499e-15 |
 |   10 |         Eigen::CG<IncompleteLUT> |       11 secs |      3.5 secs |     9.88902e-13 |
-|   11 |   Eigen::BiCGSTAB<IncompleteLUT> |       11 secs |      4.5 secs |     5.71533e-16 |
-|   12 |                         warp::cr |  0.00023 secs |       18 secs |      1.0804e-07 |
-|   13 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       22 secs |     6.30463e-15 |
-|   14 |                  Eigen::SparseLU |       35 secs |     0.74 secs |     5.55392e-12 |
-|    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 0.000102 exceeds 1e-06 |
-|    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: backward error 0.281 exceeds 1e-06 |
+|   11 |   Eigen::BiCGSTAB<IncompleteLUT> |       11 secs |      4.6 secs |     5.71533e-16 |
+|   12 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       20 secs |     6.30463e-15 |
+|   13 |                  Eigen::SparseLU |       35 secs |     0.55 secs |     5.55392e-12 |
+|   14 |                         warp::cr |   0.0002 secs |       73 secs |      1.9433e-08 |
+|    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 0.0001483 exceeds 1e-06 |
+|    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: backward error 0.1013 exceeds 1e-06 |
 |    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: backward error 0.2168 exceeds 1e-06 |
 
 *(fused): this solver's API has no separate factor step; the whole
@@ -326,22 +326,22 @@ produces:
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |                     NVIDIA cuDSS |      7.1 secs |   0.0054 secs |     5.36518e-08 |
-| 🥈 2 |      Eigen::CholmodSupernodalLLT |      9.8 secs |     0.31 secs |     1.17512e-13 |
-| 🥉 3 |                Eigen::PardisoLLT |      8.9 secs |      1.6 secs |     6.38005e-15 |
-|    4 |               Eigen::PardisoLDLT |      9.5 secs |      1.5 secs |     6.25047e-15 |
-|    5 |                        NASOQ LBL |       11 secs |     0.46 secs |     1.71662e-13 |
-|    6 |             Eigen::SimplicialLLT |       35 secs |      1.1 secs |     3.38364e-13 |
-|    7 |            Eigen::SimplicialLDLT |       36 secs |        1 secs |     1.41199e-13 |
-|    8 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       41 secs |     6.21089e-13 |
-|    9 |                         warp::cr |  0.00023 secs |       46 secs |     4.55049e-07 |
-|   10 |              catamari::SparseLDL |       45 secs |     0.94 secs |     1.90941e-13 |
-|   11 |                  Eigen::SparseLU |  1.5e+02 secs |      1.8 secs |     7.41722e-09 |
+| 🥇 1 |                     NVIDIA cuDSS |      6.4 secs |   0.0054 secs |     5.36518e-08 |
+| 🥈 2 |      Eigen::CholmodSupernodalLLT |      9.1 secs |     0.31 secs |     1.17512e-13 |
+| 🥉 3 |               Eigen::PardisoLDLT |      9.2 secs |      1.2 secs |     6.25047e-15 |
+|    4 |                Eigen::PardisoLLT |      8.8 secs |      1.8 secs |     6.38005e-15 |
+|    5 |                        NASOQ LBL |       11 secs |     0.48 secs |     1.71662e-13 |
+|    6 |             Eigen::SimplicialLLT |       35 secs |     0.94 secs |     3.38364e-13 |
+|    7 |            Eigen::SimplicialLDLT |       35 secs |     0.87 secs |     1.41199e-13 |
+|    8 |        NVIDIA cuSOLVER (Sp Chol) |     (fused)* |       37 secs |     6.21089e-13 |
+|    9 |              catamari::SparseLDL |       45 secs |     0.84 secs |     1.90941e-13 |
+|   10 |                  Eigen::SparseLU |  1.5e+02 secs |      1.5 secs |     7.41722e-09 |
+|   11 |                         warp::cr |  0.00024 secs |  4.9e+02 secs |     1.84984e-08 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
 |    - |   Eigen::BiCGSTAB<IncompleteLUT> |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
 |    - |         Eigen::CG<IncompleteLUT> |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
-|    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 0.0008691 exceeds 1e-06 |
-|    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: backward error 0.007873 exceeds 1e-06 |
+|    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 0.0003671 exceeds 1e-06 |
+|    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: backward error 0.01098 exceeds 1e-06 |
 |    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: backward error 0.8132 exceeds 1e-06 |
 
 *(fused): this solver's API has no separate factor step; the whole
@@ -351,19 +351,19 @@ produces:
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |                     NVIDIA cuDSS |      5.5 secs |    0.014 secs |     4.35948e-16 |
-| 🥈 2 |                        NASOQ LBL |      6.9 secs |     0.49 secs |     2.88059e-08 |
-| 🥉 3 |               Eigen::PardisoLDLT |      6.5 secs |      2.1 secs |     4.35266e-16 |
-|    4 |            Eigen::SimplicialLDLT |      9.2 secs |     0.44 secs |     1.09396e-07 |
-|    5 |       catamari::SparseLDL (LDLᵀ) |       12 secs |      0.4 secs |     1.41253e-07 |
+| 🥇 1 |                     NVIDIA cuDSS |      5.3 secs |    0.015 secs |     4.20084e-16 |
+| 🥈 2 |                        NASOQ LBL |      6.9 secs |     0.47 secs |     2.88059e-08 |
+| 🥉 3 |               Eigen::PardisoLDLT |      6.2 secs |        2 secs |     4.35266e-16 |
+|    4 |            Eigen::SimplicialLDLT |      8.8 secs |     0.43 secs |     1.09396e-07 |
+|    5 |       catamari::SparseLDL (LDLᵀ) |       12 secs |     0.41 secs |     1.41253e-07 |
 |    6 |                 Eigen::UmfPackLU |       11 secs |      2.2 secs |     3.91761e-16 |
-|    7 |                  Eigen::SparseLU |       30 secs |      0.8 secs |     2.92105e-14 |
+|    7 |                  Eigen::SparseLU |       30 secs |     0.61 secs |     2.92105e-14 |
 |    - |   Eigen::BiCGSTAB<IncompleteLUT> |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |         Eigen::CG<IncompleteLUT> |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |                         warp::cr |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
-|    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: backward error 0.7682 exceeds 1e-06 |
+|    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: backward error 0.7422 exceeds 1e-06 |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |                Eigen::PardisoLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
@@ -375,7 +375,7 @@ produces:
 |-----:|--------------------------------:|------------:|------------:|----------------:|
 | 🥇 1 |       catamari::SparseLDL (LDLᵀ) |       45 secs |      1.1 secs |     1.17789e-09 |
 | 🥈 2 |                  Eigen::SparseLU |    1e+02 secs |      1.6 secs |     1.42071e-12 |
-|    - |                     NVIDIA cuDSS |           - |           - | skipped: did not actually succeed: backward error 0.4056 exceeds 1e-06 |
+|    - |                     NVIDIA cuDSS |           - |           - | skipped: did not actually succeed: backward error 0.5421 exceeds 1e-06 |
 |    - |   Eigen::BiCGSTAB<IncompleteLUT> |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |         Eigen::CG<IncompleteLUT> |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |

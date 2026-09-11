@@ -112,6 +112,26 @@ def backward_error(Q, Q_abs, b, x):
 TIME_LIMIT_SECONDS = 600.0  # matches main.cpp's kIterativeTimeLimitSeconds
 
 
+# A genuinely non-convergent solve (e.g. cg on an indefinite system, which
+# it isn't designed to handle) doesn't reliably improve at all -- it can
+# oscillate or plateau rather than approach berr_target. Once max_total_iters
+# was raised (see main.cpp's kMaxIterativeIterations comment) to give real,
+# large, well-conditioned systems room to actually converge, that same
+# generous budget became a liability for a small system that will NEVER
+# converge. Detect the stall directly instead of just capping it: if
+# backward error hasn't improved by at least STALL_IMPROVEMENT_FRACTION
+# (relatively) over STALL_CHUNK_LIMIT consecutive chunks, stop -- a genuine
+# "not making progress" signal, not an arbitrary budget, so it doesn't cut
+# off systems that are actually still converging.
+STALL_IMPROVEMENT_FRACTION = 0.01
+STALL_CHUNK_LIMIT = 5
+# Hard ceiling on chunk size regardless of the ~5s-of-work time estimate:
+# on a cheap/tiny problem where each iteration costs microseconds, "~5s of
+# work" can mean hundreds of thousands of iterations in a single chunk,
+# which defeats stall detection above (it only checks BETWEEN chunks).
+MAX_CHUNK_SIZE = 5000
+
+
 def solve_time_limited(fn, A, Q, Q_abs, b_np, b, x, M, check_every, max_total_iters, berr_target):
     """Chunked, wall-clock-limited solve mirroring main.cpp's solve_rhs():
     repeatedly calls fn() with a growing iteration budget, x carrying over
@@ -127,6 +147,8 @@ def solve_time_limited(fn, A, Q, Q_abs, b_np, b, x, M, check_every, max_total_it
     deadline = time.perf_counter() + TIME_LIMIT_SECONDS
     chunk = 10
     iterations_used = 0
+    best_berr = float("inf")
+    stall_chunks = 0
     while True:
         t0 = time.perf_counter()
         # tol left at Warp's own tight default -- irrelevant to whether we
@@ -138,8 +160,25 @@ def solve_time_limited(fn, A, Q, Q_abs, b_np, b, x, M, check_every, max_total_it
         chunk_dt = time.perf_counter() - t0
         iterations_used += chunk
         x_np = x.numpy()
-        if backward_error(Q, Q_abs, b_np, x_np) < berr_target or iterations_used >= max_total_iters:
+        berr = backward_error(Q, Q_abs, b_np, x_np)
+        # NaN unambiguously means the solve has diverged beyond any hope of
+        # recovery -- stop immediately rather than folding it into stall
+        # detection below (an earlier version treated NaN as "improved" to
+        # avoid a spurious stall-counter increment, but that reset the
+        # counter to 0 every chunk once NaN appeared, so it never fired,
+        # and `berr < target` is also always False for NaN (IEEE 754) --
+        # the loop had no way out except the full max_total_iters cap).
+        if math.isnan(berr):
             return False, iterations_used
+        if berr < berr_target or iterations_used >= max_total_iters:
+            return False, iterations_used
+        if berr < best_berr * (1.0 - STALL_IMPROVEMENT_FRACTION):
+            best_berr = berr
+            stall_chunks = 0
+        else:
+            stall_chunks += 1
+            if stall_chunks >= STALL_CHUNK_LIMIT:
+                return False, iterations_used
         now = time.perf_counter()
         if now >= deadline:
             return True, iterations_used
@@ -150,9 +189,9 @@ def solve_time_limited(fn, A, Q, Q_abs, b_np, b, x, M, check_every, max_total_it
         target_secs = min(5.0, deadline - now)
         if chunk_dt > 1e-6:
             per_iter = chunk_dt / chunk
-            chunk = max(10, min(remaining, int(target_secs / per_iter)))
+            chunk = max(10, min(remaining, int(target_secs / per_iter), MAX_CHUNK_SIZE))
         else:
-            chunk = max(10, min(remaining, chunk * 4))
+            chunk = max(10, min(remaining, chunk * 4, MAX_CHUNK_SIZE))
 
 
 def run_solver(fn, A, Q, Q_abs, rhs, device, maxiter, berr_target, check_every):
@@ -250,7 +289,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dir", required=True, help="directory of k<k>_Q.mtx/k<k>_rhs.mtx from --dump-matrices")
     ap.add_argument("--device", default=None, help="warp device (default: cuda:0 if available, else cpu)")
-    ap.add_argument("--maxiter", type=int, default=20000, help="safety-net cap, matches the C++ benchmark's kMaxIterativeIterations -- deliberately high so --berr-target (the actual intended stopping criterion) is what usually decides, not this")
+    ap.add_argument("--maxiter", type=int, default=1000000, help="safety-net cap, matches the C++ benchmark's kMaxIterativeIterations -- deliberately high (measured: 200000 iterations only took 26.6s on the dragon mesh's biharmonic system, reaching backward error ~2.85e-13) so --berr-target and the time limit, not this, are what usually decide")
     ap.add_argument("--berr-target", type=float, default=1e-8, help="componentwise relative backward error target iterative solvers are driven toward (checked externally after each chunk, not via Warp's own internal tol=), matching the C++ benchmark's kBackwardErrorTarget")
     ap.add_argument("--check-every", type=int, default=0, help="0 disables host-side convergence checks (pure CUDA-graph replay, but no early exit without device-side conditional graphs); >0 enables early exit at the cost of host syncs")
     ap.add_argument("--csv", default=None, help="write results in the same schema as the C++ benchmark's --csv")

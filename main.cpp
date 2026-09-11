@@ -191,7 +191,19 @@ static double backward_error(
 // bounds worst-case runtime on a system that never converges (e.g. CG on a
 // genuinely indefinite input, which it isn't designed to handle) instead of
 // letting it hang.
-static const int kMaxIterativeIterations = 20000;
+//
+// This was 20000 until measurement showed that was the wrong thing binding
+// in practice: on the dragon mesh's biharmonic system, warp::cr genuinely
+// converges (monotonically, no drift -- verified against an independently
+// recomputed backward error at checkpoints) but only reaches backward error
+// ~8e-6 by 20000 iterations, nowhere near kBackwardErrorTarget. Iterations
+// are cheap on this hardware -- 200000 took 26.6s and reached ~2.85e-13,
+// essentially machine precision -- so the 20000 cap, not the 10-minute time
+// limit, was the thing actually stopping convergence on well-conditioned-
+// but-slow-per-iteration systems. Raised by 50x so the time limit is the
+// real backstop again, matching the original intent: at the measured rate
+// here, 1000000 iterations is still well under kIterativeTimeLimitSeconds.
+static const int kMaxIterativeIterations = 1000000;
 
 // The actual intended stopping criterion for iterative solvers: componentwise
 // relative backward error (see backward_error() above) under this target,
@@ -227,6 +239,29 @@ static const double kIterativeTimeLimitSeconds = 600.0; // 10 minutes
 // single plain solve() call. Q is needed (in addition to rhs) because the
 // per-chunk stopping check is backward_error(Q, rhs, x), not anything
 // Eigen's own factor object tracks internally.
+// A genuinely non-convergent solve (e.g. CG on an indefinite system, which
+// it isn't designed to handle) doesn't reliably improve at all -- it can
+// oscillate or plateau rather than approach kBackwardErrorTarget. Once
+// kMaxIterativeIterations was raised (see above) to give real, large,
+// well-conditioned systems room to actually converge (measured: cheap
+// enough that 200000 iterations took 26.6s on the dragon mesh), that same
+// generous budget became a liability for a small system that will NEVER
+// converge: the small synthetic grid used by --check/CTest went from a
+// ~5-7s regression test to 467s once a genuinely-indefinite case had a
+// million iterations (and up to kIterativeTimeLimitSeconds) to spin through
+// before giving up. Detect the stall directly instead of just capping it:
+// if backward error hasn't improved by at least kStallImprovementFraction
+// (relatively) over kStallChunkLimit consecutive chunks, stop -- this is a
+// genuine "not making progress" signal, not an arbitrary budget, so it
+// doesn't cut off systems that are actually still converging (like the
+// dragon mesh case above, which improves every chunk).
+static const double kStallImprovementFraction = 0.01;
+static const int kStallChunkLimit = 5;
+// Hard ceiling on chunk size regardless of the ~5s-of-work time estimate --
+// see the comment at its use site (in the chunk-sizing logic below) for why
+// this is needed alongside stall detection, not instead of it.
+static const int kMaxChunkSize = 5000;
+
 template <typename Factor>
 auto solve_rhs(Factor & factor, const Eigen::SparseMatrix<double> & Q, const Eigen::MatrixXd & rhs, bool & timed_out, int & iterations_used, int)
   -> decltype(factor.solveWithGuess(rhs, rhs), Eigen::MatrixXd())
@@ -236,6 +271,8 @@ auto solve_rhs(Factor & factor, const Eigen::SparseMatrix<double> & Q, const Eig
   Eigen::MatrixXd x = Eigen::MatrixXd::Zero(rhs.rows(), rhs.cols());
   const double deadline = igl::get_seconds() + kIterativeTimeLimitSeconds;
   int chunk = 10;
+  double best_berr = std::numeric_limits<double>::infinity();
+  int stall_chunks = 0;
   while(true)
   {
     factor.setMaxIterations(chunk);
@@ -253,7 +290,28 @@ auto solve_rhs(Factor & factor, const Eigen::SparseMatrix<double> & Q, const Eig
     // count, "chunk" itself is what a non-converged call actually spent
     // (this is an approximation when some columns converge before others).
     iterations_used += chunk;
-    if(backward_error(Q,rhs,x) < kBackwardErrorTarget || iterations_used >= kMaxIterativeIterations) break;
+    const double berr = backward_error(Q,rhs,x);
+    // NaN unambiguously means the solve has diverged beyond any hope of
+    // recovery -- more iterations won't un-diverge it, so stop immediately
+    // rather than folding it into the stall-detection logic below. (An
+    // earlier version treated NaN as "improved", to avoid incrementing the
+    // stall counter on a spurious reading -- but that meant the stall
+    // counter reset to 0 every single chunk once NaN appeared, so it never
+    // fired at all, and the primary break condition `berr < target` is also
+    // always false for NaN (IEEE 754), so the loop had no way out except
+    // the full kMaxIterativeIterations cap -- exactly the pathological
+    // multi-hour case this whole timeout mechanism exists to prevent.)
+    if(std::isnan(berr)) break;
+    if(berr < kBackwardErrorTarget || iterations_used >= kMaxIterativeIterations) break;
+    if(berr < best_berr*(1.0-kStallImprovementFraction))
+    {
+      best_berr = berr;
+      stall_chunks = 0;
+    }
+    else if(++stall_chunks >= kStallChunkLimit)
+    {
+      break;
+    }
     const double now = igl::get_seconds();
     if(now >= deadline) { timed_out = true; break; }
     // Adapt the next chunk size toward ~5s of work (or however much time is
@@ -261,17 +319,23 @@ auto solve_rhs(Factor & factor, const Eigen::SparseMatrix<double> & Q, const Eig
     // observed per-iteration cost, so we check the deadline reasonably
     // often without paying excessive per-chunk call overhead on easy
     // problems (few, tiny chunks) or overshooting the deadline by a wide
-    // margin on hard ones (one huge final chunk).
+    // margin on hard ones (one huge final chunk). Also hard-capped at
+    // kMaxChunkSize regardless of the time estimate: on a cheap/tiny
+    // problem where each iteration costs microseconds, "~5s of work" can
+    // mean hundreds of thousands of iterations in a single chunk, which
+    // defeats the stall detection above (it only checks BETWEEN chunks) --
+    // this is exactly what made a genuinely non-convergent small system
+    // burn a full giant chunk before ever getting a chance to bail out.
     const int remaining = kMaxIterativeIterations - iterations_used;
     const double target_secs = std::min(5.0, deadline - now);
     if(chunk_dt > 1e-6)
     {
       const double per_iter = chunk_dt / (double)chunk;
-      chunk = std::max(10, std::min(remaining, (int)(target_secs/per_iter)));
+      chunk = std::max(10, std::min({remaining, (int)(target_secs/per_iter), kMaxChunkSize}));
     }
     else
     {
-      chunk = std::max(10, std::min(remaining, chunk*4));
+      chunk = std::max(10, std::min({remaining, chunk*4, kMaxChunkSize}));
     }
   }
   return x;
