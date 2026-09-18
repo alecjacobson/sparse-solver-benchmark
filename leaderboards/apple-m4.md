@@ -85,12 +85,12 @@ Regenerate with:
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |     catamari::SparseLDL (LDLᵀ) |       26 secs |     0.52 secs |     1.55308e-09 |
-| 🥈 2 |                  Eigen::SparseLU |       50 secs |      1.4 secs |     3.47129e-12 |
-| 🥉 3 |             MA57 (symla, LDLᵀ) |    1e+02 secs |     0.46 secs |     2.65418e-10 |
+| 🥇 1 |                        NASOQ LBL |      2.8 secs |     0.37 secs |     5.70661e-11 |
+| 🥈 2 |     catamari::SparseLDL (LDLᵀ) |       26 secs |     0.52 secs |     1.55308e-09 |
+| 🥉 3 |                  Eigen::SparseLU |       50 secs |      1.4 secs |     3.47129e-12 |
+|    4 |             MA57 (symla, LDLᵀ) |    1e+02 secs |     0.46 secs |     2.65418e-10 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: known crash risk: excessive MKL thread churn on this system's fill-in |
 |    - |            Eigen::SimplicialLDLT |           - |           - | skipped: known crash: SIGSEGV in Eigen's unpivoted LDLT at this scale |
-|    - |                        NASOQ LBL |           - |           - | skipped: known crash: SIGSEGV in libmetis genmmd/mmdelm via NASOQ's symbolic_analysis_lin_solve on this system's sparsity pattern |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |        Accelerate SparseCholesky |           - |           - | skipped: factorization failed: status -1 |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
@@ -142,14 +142,8 @@ Regenerate with:
 > unconditionally-available serial variant (`ldl_variant = 2`), which is
 > also the right choice given this file already forces `num_thread = 1`.
 > With both fixes, NASOQ LBL lands respectably (top 3 on Harmonic/
-> Biharmonic/Triharmonic, and 🥇 first on Mixed Biharmonic). It's still
-> unavailable on Mixed Triharmonic, where it crashes with a SIGSEGV inside
-> `libmetis` during symbolic analysis on this system's sparsity pattern --
-> unrelated to the two fixes above (filed as
-> [sympiler/nasoq#33](https://github.com/sympiler/nasoq/issues/33); still
-> reproduces on this machine, though here as an infinite hang inside
-> `libmetis__mmdelm` rather than a SIGSEGV -- same underlying heap
-> corruption, different downstream symptom, see that issue's comments).
+> Biharmonic/Triharmonic, 🥇 first on both Mixed Biharmonic and, as of the
+> `AMD`-ordering switch below, Mixed Triharmonic too).
 
 > [!NOTE]
 > **`NASOQ LBL`'s numbers above use `AMD` ordering, not NASOQ's previous
@@ -165,6 +159,22 @@ Regenerate with:
 > 1.2s vs. 3.7s (factor time) -- the same lesson as this report's earlier
 > CHOLMOD/METIS note above. This project's `CMakeLists.txt` now sets
 > `NASOQ_ORDERING AMD` explicitly for its own NASOQ integration.
+>
+> Bonus effect: switching to AMD ordering also made Mixed Triharmonic
+> stop crashing. That system used to reliably SIGSEGV inside libmetis's
+> minimum-degree ordering (`genmmd`/`mmdelm`), root-caused (see
+> [sympiler/nasoq#33](https://github.com/sympiler/nasoq/issues/33)) to an
+> out-of-bounds heap write in NASOQ's own `find_perturbation()`/
+> `apply_perturbation()`, inherent to this system's structurally-zero
+> λ-block diagonal. **That OOB write is still unfixed upstream and still
+> happens under AMD ordering too** -- it just doesn't corrupt anything
+> AMD's ordering routine reads, unlike METIS's, so no crash is currently
+> observed (verified: 20/20 repeated small-grid runs plus the full dragon
+> mesh, all clean with correct results, ~5.7e-11 backward error). This is
+> closer to "lucky" than "fixed": if `NASOQ_ORDERING` is ever switched back
+> to `METIS`, or NASOQ's own allocator/heap layout changes, this crash risk
+> returns. See `main.cpp`'s `IGL_WITH_NASOQ` block for the same caveat
+> in-code.
 
 > [!NOTE]
 > **A separate attempt to switch NASOQ's BLAS backend from OpenBLAS to

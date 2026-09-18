@@ -1554,27 +1554,24 @@ int main(int argc, char * argv[])
     solve_symla(is_mixed ? "MA57 (symla, LDLᵀ)" : "MA57 (symla)",k,Q,rhs,U);
 #endif
 #ifdef IGL_WITH_NASOQ
-    if(k == 5)
-    {
-      // Re-verified after fixing the OpenMP thread-storm bug (this crash
-      // predates that fix, so it was worth re-checking): still reproduces.
-      // Root cause identified via gdb: SIGSEGV inside libmetis.so.5's
-      // minimum-degree ordering (genmmd/mmdelm), called from NASOQ's own
-      // symbolic_analysis_lin_solve(). Reproduces (intermittently --
-      // memory-layout dependent, consistent with an out-of-bounds write)
-      // even on a tiny synthetic --grid 20 mixed triharmonic system
-      // (~1200 rows), i.e. this is inherent to the system's structure
-      // (the lambda block's structurally-zero diagonal, shared with the
-      // Pardiso reordering hang above) rather than a scale issue. Skip
-      // rather than risk it; see the upstream NASOQ issue for the reduced
-      // repro and backtrace.
-      record(k, "NASOQ LBL", 0, 0, 0, true,
-        "known crash: SIGSEGV in libmetis genmmd/mmdelm via NASOQ's symbolic_analysis_lin_solve on this system's sparsity pattern");
-    }
-    else
-    {
-      solve_nasoq_lbl("NASOQ LBL",k,Q,rhs,U);
-    }
+    // Used to hardcode-skip k==5 here: with METIS ordering (NASOQ's old,
+    // only-reachable ordering -- see the NASOQ_ORDERING CMake option this
+    // project now sets to AMD), this system reliably crashed -- SIGSEGV
+    // inside libmetis's minimum-degree ordering (genmmd/mmdelm), called
+    // from NASOQ's own symbolic_analysis_lin_solve(). Root cause (see
+    // https://github.com/sympiler/nasoq/issues/33): an out-of-bounds heap
+    // write in NASOQ's own find_perturbation()/apply_perturbation(), for
+    // any column with zero stored lower-triangle entries -- inherent to
+    // this mixed system's structurally-zero λ-block diagonal, not a scale
+    // issue (reproduces even on a tiny --grid 20 mesh). That OOB write
+    // itself is UNFIXED upstream and still happens under AMD ordering too
+    // -- it just doesn't corrupt anything AMD's ordering routine reads,
+    // unlike METIS's, so no crash is currently observed (verified: 20/20
+    // repeated --grid 20 runs and the full dragon mesh, both clean, correct
+    // results). This is closer to "lucky" than "fixed" -- if NASOQ_ORDERING
+    // is ever switched back to METIS, or NASOQ's own allocator/heap layout
+    // changes, this crash risk returns.
+    solve_nasoq_lbl("NASOQ LBL",k,Q,rhs,U);
 #endif
 #ifdef IGL_WITH_MKL
     if(k == 5)
