@@ -8,6 +8,7 @@ option(IGL_WITH_CUDSS     "Use NVIDIA cuDSS/cuSOLVER (requires the CUDA toolkit)
 option(IGL_WITH_NASOQ     "Use NASOQ's LBL (parallel symmetric-indefinite) solver" ON)
 option(IGL_WITH_CATAMARI  "Use catamari's SparseLDL solver (needs the mantis/quotient submodules too)" ON)
 option(IGL_WITH_MA57      "Use MA57 (symla), a from-scratch header-only symmetric-indefinite solver" ON)
+option(IGL_WITH_ACCELERATE_SPARSE "Use Apple's Accelerate Sparse Solvers library (macOS-only)" ON)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
@@ -400,6 +401,16 @@ function(add_framework target framework)
     endif()
 endfunction()
 add_framework(${PROJECT_NAME} Accelerate)
+
+if(IGL_WITH_ACCELERATE_SPARSE AND NOT APPLE)
+  message(WARNING "Accelerate's Sparse Solvers library is macOS-only; disabling IGL_WITH_ACCELERATE_SPARSE.")
+  set(IGL_WITH_ACCELERATE_SPARSE OFF)
+endif()
+if(IGL_WITH_ACCELERATE_SPARSE)
+  # Header-only (Accelerate/Sparse/Solve.h, macOS 10.13+); Accelerate itself
+  # is already linked above via add_framework, so nothing further to link.
+  target_compile_definitions(${PROJECT_NAME} PUBLIC -DIGL_WITH_ACCELERATE_SPARSE)
+endif()
 
 # Correctness regression tests: run on a small synthetic grid mesh (not the
 # 720K-vertex dragon) and assert every compiled-in solver's L∞ residual

@@ -16,81 +16,6 @@ Warp rows regenerated separately via [`warp_bench/`](../warp_bench/) (see its
 README) and merged into the ranking below by total (factor + solve) time,
 same as the C++ side's own ranking logic.
 
-> [!NOTE]
-> **`Eigen::CholmodSupernodalLLT` is ~6-8x slower here than the ~0.86s a
-> 2013 quad-core MacBook gets on the same mesh/system** (main branch's
-> README) -- extensively investigated, and it is NOT a regression or a bug
-> in this project. Ruled out one at a time, each independently verified: a
-> concurrent CPU-heavy process from another session on this shared machine
-> (fixed by re-measuring idle); `BLA_VENDOR`/BLAS threading misconfiguration
-> (confirmed correctly threaded); a missing/too-old TBB (installed the
-> correct version, made no difference -- CHOLMOD doesn't even use TBB, only
-> SPQR does); CHOLMOD's own `nthreads_max` OpenMP thread cap for its
-> per-supernode dense kernels (swept 1-128 threads: **no effect** when
-> measured in isolated fresh processes -- an earlier sequential-sweep-in-one-
-> process version of this test showed a dramatic, misleading curve that
-> turned out to be a measurement artifact, likely cumulative thermal/cache
-> effects across repeated heavy factorizations, not a real thread-count
-> sensitivity); NUMA placement (pinning to a single socket made things
-> *worse*, not better); AVX-512 frequency downclocking (forcing MKL to AVX2
-> made things *3x worse*, not better). Bisected against `main` branch's exact
-> original CHOLMOD pin, built standalone and timed on the identical matrix on
-> this same machine: **6.8s** -- statistically identical to the current
-> branch. This was never fast on this hardware; the 0.86s number simply
-> doesn't reproduce here, for reasons outside this repo's code or build
-> config (most likely something about this server's per-access memory
-> latency being genuinely worse for CHOLMOD's supernodal traversal pattern
-> than a small laptop's simpler memory subsystem, despite far more raw
-> bandwidth/cores on paper -- unconfirmed, no further machine available to
-> test that specific theory). Separately, disabling CHOLMOD's METIS ordering
-> (`WITH_METIS OFF` in `CMakeLists.txt` -- this SuiteSparse fork's rename of
-> the old `WITH_PARTITION` toggle, silently left ON) is a real fix that
-> measurably helped k=3 specifically; these numbers reflect it.
-
-> [!NOTE]
-> **`Eigen::CholmodSupernodalLLT (CUDA)`** is CHOLMOD's own GPU-accelerated
-> supernodal factorization (`Common.useGPU`, offloading dense supernode
-> BLAS3 updates to cuBLAS) -- distinct from cuDSS/cuSOLVER above, which are
-> separate NVIDIA libraries. It's consistently *slower* than the CPU row at
-> this problem size (6.9s/24s/50s vs. 5.5s/17s/31s factor time for k=1/2/3),
-> not faster -- plausible given the CPU investigation above already found
-> this workload thread-count-insensitive (not compute-bound), so GPU
-> transfer/kernel-launch overhead likely outweighs any benefit here. Included
-> as a correctly-measured, genuine result. Getting this row building required
-> two real CMake fixes, not just enabling `WITH_CUDA`: (1) `CUDA::cublas`
-> doesn't exist as a target via plain `find_package(CUDAToolkit)` on this
-> machine (same pip-vs-toolkit split as cuDSS/cuSOLVER -- see `CMakeLists.txt`),
-> so it's synthesized from the pip `nvidia-cublas-cu12` tree like the others;
-> (2) `enable_language(CUDA)` (needed early for cuDSS's own detection) leaves
-> `CMAKE_CUDA_HOST_COMPILER` defined-but-empty in this project's scope,
-> which SuiteSparse's own CMakeLists then inherits instead of falling back to
-> `CMAKE_CXX_COMPILER`, passing nvcc a blank `--compiler-bindir=` that fails
-> with "nvcc fatal: Failed to preprocess host compiler properties" -- fixed
-> by setting `CMAKE_CUDA_HOST_COMPILER` explicitly ourselves.
-
-> [!NOTE]
-> **`Eigen::CG<IncompleteCholesky>` (renamed from `Eigen::CG<IncompleteLUT>`)
-> converges on k=1 but fails to reach the backward-error target in time on
-> k=2/k=3**, where the old `IncompleteLUT`-paired version used to converge.
-> `IncompleteCholesky` is the theoretically correct preconditioner for CG (see
-> README's "How is accuracy measured?" section) -- `IncompleteLUT` is a
-> general, non-symmetric ILU that has no business being paired with CG's
-> SPD-preconditioner requirement, and was swapped out for exactly that
-> reason. This result shows that theoretical correctness didn't translate to
-> better empirical convergence on k=2/k=3's badly-scaled systems here --
-> `IncompleteLUT`'s asymmetric factorization happened to be a more effective
-> preconditioner in practice on this specific matrix, despite the
-> convergence-theory mismatch. A genuine, if slightly counterintuitive,
-> result -- not a bug in the swap.
-
-> [!NOTE]
-> **MA57 (symla) is dramatically slower than every other solver here at this
-> scale** (33s-3600s factor time vs. single-digit-to-tens of seconds for
-> everything else) despite matching their accuracy. It's a new, from-scratch
-> solver (see `ma57/README.md`) without the decades of tuning behind
-> CHOLMOD/Pardiso/UMFPACK -- included here as a correctly-reported, genuine
-> result, not a bug in this benchmark's harness.
-
 # Harmonic
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
@@ -217,3 +142,77 @@ same as the C++ side's own ranking logic.
 |    - | Eigen::CholmodSupernodalLLT (CUDA) |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 
+> [!NOTE]
+> **`Eigen::CholmodSupernodalLLT` is ~6-8x slower here than the ~0.86s a
+> 2013 quad-core MacBook gets on the same mesh/system** (main branch's
+> README) -- extensively investigated, and it is NOT a regression or a bug
+> in this project. Ruled out one at a time, each independently verified: a
+> concurrent CPU-heavy process from another session on this shared machine
+> (fixed by re-measuring idle); `BLA_VENDOR`/BLAS threading misconfiguration
+> (confirmed correctly threaded); a missing/too-old TBB (installed the
+> correct version, made no difference -- CHOLMOD doesn't even use TBB, only
+> SPQR does); CHOLMOD's own `nthreads_max` OpenMP thread cap for its
+> per-supernode dense kernels (swept 1-128 threads: **no effect** when
+> measured in isolated fresh processes -- an earlier sequential-sweep-in-one-
+> process version of this test showed a dramatic, misleading curve that
+> turned out to be a measurement artifact, likely cumulative thermal/cache
+> effects across repeated heavy factorizations, not a real thread-count
+> sensitivity); NUMA placement (pinning to a single socket made things
+> *worse*, not better); AVX-512 frequency downclocking (forcing MKL to AVX2
+> made things *3x worse*, not better). Bisected against `main` branch's exact
+> original CHOLMOD pin, built standalone and timed on the identical matrix on
+> this same machine: **6.8s** -- statistically identical to the current
+> branch. This was never fast on this hardware; the 0.86s number simply
+> doesn't reproduce here, for reasons outside this repo's code or build
+> config (most likely something about this server's per-access memory
+> latency being genuinely worse for CHOLMOD's supernodal traversal pattern
+> than a small laptop's simpler memory subsystem, despite far more raw
+> bandwidth/cores on paper -- unconfirmed, no further machine available to
+> test that specific theory). Separately, disabling CHOLMOD's METIS ordering
+> (`WITH_METIS OFF` in `CMakeLists.txt` -- this SuiteSparse fork's rename of
+> the old `WITH_PARTITION` toggle, silently left ON) is a real fix that
+> measurably helped k=3 specifically; these numbers reflect it.
+
+> [!NOTE]
+> **`Eigen::CholmodSupernodalLLT (CUDA)`** is CHOLMOD's own GPU-accelerated
+> supernodal factorization (`Common.useGPU`, offloading dense supernode
+> BLAS3 updates to cuBLAS) -- distinct from cuDSS/cuSOLVER above, which are
+> separate NVIDIA libraries. It's consistently *slower* than the CPU row at
+> this problem size (6.9s/24s/50s vs. 5.5s/17s/31s factor time for k=1/2/3),
+> not faster -- plausible given the CPU investigation above already found
+> this workload thread-count-insensitive (not compute-bound), so GPU
+> transfer/kernel-launch overhead likely outweighs any benefit here. Included
+> as a correctly-measured, genuine result. Getting this row building required
+> two real CMake fixes, not just enabling `WITH_CUDA`: (1) `CUDA::cublas`
+> doesn't exist as a target via plain `find_package(CUDAToolkit)` on this
+> machine (same pip-vs-toolkit split as cuDSS/cuSOLVER -- see `CMakeLists.txt`),
+> so it's synthesized from the pip `nvidia-cublas-cu12` tree like the others;
+> (2) `enable_language(CUDA)` (needed early for cuDSS's own detection) leaves
+> `CMAKE_CUDA_HOST_COMPILER` defined-but-empty in this project's scope,
+> which SuiteSparse's own CMakeLists then inherits instead of falling back to
+> `CMAKE_CXX_COMPILER`, passing nvcc a blank `--compiler-bindir=` that fails
+> with "nvcc fatal: Failed to preprocess host compiler properties" -- fixed
+> by setting `CMAKE_CUDA_HOST_COMPILER` explicitly ourselves.
+
+> [!NOTE]
+> **`Eigen::CG<IncompleteCholesky>` (renamed from `Eigen::CG<IncompleteLUT>`)
+> converges on k=1 but fails to reach the backward-error target in time on
+> k=2/k=3**, where the old `IncompleteLUT`-paired version used to converge.
+> `IncompleteCholesky` is the theoretically correct preconditioner for CG (see
+> README's "How is accuracy measured?" section) -- `IncompleteLUT` is a
+> general, non-symmetric ILU that has no business being paired with CG's
+> SPD-preconditioner requirement, and was swapped out for exactly that
+> reason. This result shows that theoretical correctness didn't translate to
+> better empirical convergence on k=2/k=3's badly-scaled systems here --
+> `IncompleteLUT`'s asymmetric factorization happened to be a more effective
+> preconditioner in practice on this specific matrix, despite the
+> convergence-theory mismatch. A genuine, if slightly counterintuitive,
+> result -- not a bug in the swap.
+
+> [!NOTE]
+> **MA57 (symla) is dramatically slower than every other solver here at this
+> scale** (33s-3600s factor time vs. single-digit-to-tens of seconds for
+> everything else) despite matching their accuracy. It's a new, from-scratch
+> solver (see `ma57/README.md`) without the decades of tuning behind
+> CHOLMOD/Pardiso/UMFPACK -- included here as a correctly-reported, genuine
+> result, not a bug in this benchmark's harness.
