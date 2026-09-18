@@ -1,3 +1,4 @@
 build/
 *.csv
 __pycache__/
+meshes/

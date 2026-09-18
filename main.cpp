@@ -3,20 +3,26 @@
 #include <omp.h>
 #endif
 
+#ifdef IGL_WITH_CATAMARI
 #include "catamari.hpp"
+#endif
 #include <Eigen/Core>
 #include <Eigen/Sparse>
 #include <igl/harmonic.h>
 #include <igl/read_triangle_mesh.h>
+#include <igl/write_triangle_mesh.h>
 #include <igl/triangulated_grid.h>
+#include <igl/decimate.h>
 #include <igl/cotmatrix.h>
 #include <igl/massmatrix.h>
 #include <igl/get_seconds.h>
 #ifdef IGL_WITH_MKL
 #include <Eigen/PardisoSupport>
 #endif
+#ifdef IGL_WITH_CHOLMOD
 #include <Eigen/CholmodSupport>
 #include <Eigen/UmfPackSupport>
+#endif
 #include <unsupported/Eigen/SparseExtra>
 #ifdef IGL_WITH_CUDSS
 #include <cuda_runtime_api.h>
@@ -395,6 +401,7 @@ void solve(
     false, "", false, timed_out, iterations_used);
 }
 
+#ifdef IGL_WITH_CATAMARI
 template <>
 void solve<catamari::SparseLDL<double>>(
   const std::string & name,
@@ -453,6 +460,7 @@ void solve<catamari::SparseLDL<double>>(
   }
   record(k, name, t_factor, t_solve, backward_error(Q,rhs,U));
 }
+#endif // IGL_WITH_CATAMARI
 
 #ifdef IGL_WITH_CUDSS
 
@@ -750,6 +758,7 @@ static void build_mixed_system(
   rhs.topRows(n) = M*V;
 }
 
+#ifdef IGL_WITH_CATAMARI
 // catamari's genuine symmetric-indefinite LDLᵀ mode (as opposed to the
 // Cholesky-only specialization above), for the mixed/indefinite systems.
 // A standalone function rather than another solve<> specialization since
@@ -812,6 +821,39 @@ void solve_catamari_ldl(
   }
   record(k, name, t_factor, t_solve, backward_error(Q,rhs,U));
 }
+#endif // IGL_WITH_CATAMARI
+
+#ifdef IGL_WITH_MA57
+#include <symla/solver.hpp>
+
+// MA57 (symla): a from-scratch, header-only multifrontal LDLᵀ solver for
+// symmetric indefinite systems. Doesn't share Eigen's factor.info() /
+// factor.compute() interface (no info(), and solve() takes/returns a plain
+// DenseMatrix), so -- like catamari's LDLᵀ mode above -- it gets its own
+// standalone function rather than a solve<> specialization.
+void solve_symla(
+  const std::string & name,
+  int k,
+  const Eigen::SparseMatrix<double> & Q,
+  const Eigen::MatrixXd & rhs,
+  Eigen::MatrixXd & U)
+{
+  if(!should_run(name)) return;
+  Timer timer;
+  symla::SymLDLT<double> solver;
+  solver.compute(Q);
+  const double t_factor = timer.toc();
+  if(solver.isSingular())
+  {
+    record(k, name, t_factor, 0, 0, true,
+      "factorization failed: numerically singular");
+    return;
+  }
+  U = solver.solve(rhs);
+  const double t_solve = timer.toc();
+  record(k, name, t_factor, t_solve, backward_error(Q,rhs,U));
+}
+#endif // IGL_WITH_MA57
 
 #ifdef IGL_WITH_NASOQ
 #include <nasoq/lbl_eigen.h>
@@ -1119,6 +1161,51 @@ static std::vector<std::string> split_lower_csv(const std::string & s)
   return out;
 }
 
+// Loads (decimating + caching on first use) a version of the checked-in
+// xyzrgb_dragon-720K.ply with roughly max_faces triangles. Grid meshes
+// (--grid) are trivially reorderable/banded and don't exercise fill-in the
+// way a real mesh's cotangent Laplacian does, so this gives a fast,
+// representative dev-loop mesh without checking in extra large .ply files:
+// the decimated mesh is generated once and cached under meshes/ (gitignored)
+// next to wherever the full-resolution dragon is found.
+static bool load_or_decimate_dragon(int max_faces, Eigen::MatrixXd & V, Eigen::MatrixXi & F)
+{
+  const char * candidates[] = { "xyzrgb_dragon-720K.ply", "../xyzrgb_dragon-720K.ply" };
+  std::string full_path;
+  for(const char * c : candidates)
+  {
+    if(std::filesystem::exists(c)) { full_path = c; break; }
+  }
+  if(full_path.empty())
+  {
+    fprintf(stderr,"error: --dragon requires xyzrgb_dragon-720K.ply to be found in "
+      "the current or parent directory (to decimate down from)\n");
+    return false;
+  }
+  const std::filesystem::path cache_dir =
+    std::filesystem::path(full_path).parent_path() / "meshes";
+  const std::filesystem::path cache_path =
+    cache_dir / ("dragon-" + std::to_string(max_faces) + ".ply");
+  if(std::filesystem::exists(cache_path))
+  {
+    return igl::read_triangle_mesh(cache_path.string(),V,F);
+  }
+  Eigen::MatrixXd FV;
+  Eigen::MatrixXi FF;
+  if(!igl::read_triangle_mesh(full_path,FV,FF)) { return false; }
+  if(FF.rows() <= max_faces) { V = FV; F = FF; }
+  else
+  {
+    Eigen::VectorXi J,I;
+    igl::decimate(FV,FF,max_faces,false,V,F,J,I);
+  }
+  std::filesystem::create_directories(cache_dir);
+  igl::write_triangle_mesh(cache_path.string(),V,F);
+  fprintf(stderr,"# cached decimated dragon (%ld faces) at %s\n",
+    (long)F.rows(),cache_path.string().c_str());
+  return true;
+}
+
 int main(int argc, char * argv[])
 {
   setbuf(stdout, NULL);
@@ -1127,12 +1214,14 @@ int main(int argc, char * argv[])
   std::string dump_dir;
   bool dump_only = false;
   int grid_n = 0;
+  int dragon_faces = 0;
   for(int i=1;i<argc;i++)
   {
     const std::string arg = argv[i];
     if(arg == "--csv" && i+1<argc) { csv_path = argv[++i]; }
     else if(arg == "--check") { g_check_mode = true; }
     else if(arg == "--grid" && i+1<argc) { grid_n = std::atoi(argv[++i]); }
+    else if(arg == "--dragon" && i+1<argc) { dragon_faces = std::atoi(argv[++i]); }
     else if(arg == "--only" && i+1<argc)
     {
       const auto toks = split_lower_csv(argv[++i]);
@@ -1147,12 +1236,12 @@ int main(int argc, char * argv[])
     else if(arg == "--dump-only") { dump_only = true; }
     else { mesh_path = arg; }
   }
-  if(mesh_path.empty() && grid_n<=0)
+  if(mesh_path.empty() && grid_n<=0 && dragon_faces<=0)
   {
     fprintf(stderr,
       "usage: %s [--csv results.csv] [--check] [--only name[,name...]] "
       "[--exclude name[,name...]] [--dump-matrices dir] [--dump-only] "
-      "(<mesh> | --grid N)\n"
+      "(<mesh> | --grid N | --dragon N)\n"
       "  --only/--exclude match case-insensitively against a substring of\n"
       "  the solver's printed name (e.g. --only nasoq, --exclude umfpack,sparselu).\n"
       "  Repeatable/comma-separated; --only takes precedence, --exclude is\n"
@@ -1163,7 +1252,12 @@ int main(int argc, char * argv[])
       "  (k<k>_Q.mtx, k<k>_rhs.mtx) to dir, for external tools (e.g. warp_bench/)\n"
       "  to load; combine with --dump-only to skip this benchmark's own solvers\n"
       "  entirely (just build+dump), or with --only/--exclude to dump alongside\n"
-      "  running a subset.\n",
+      "  running a subset.\n"
+      "  --dragon N decimates (and caches under meshes/) the checked-in\n"
+      "  xyzrgb_dragon-720K.ply down to ~N faces -- a real, fill-in-representative\n"
+      "  mesh (unlike --grid's trivially-reorderable banded grid) that's cheap\n"
+      "  enough for fast local iteration. Use the full mesh only for final\n"
+      "  leaderboard numbers.\n",
       argv[0]);
     return 1;
   }
@@ -1196,6 +1290,10 @@ int main(int argc, char * argv[])
     V.col(2).setZero();
     F = GF;
   }
+  else if(dragon_faces>0)
+  {
+    if(!load_or_decimate_dragon(dragon_faces,V,F)) { return 1; }
+  }
   else
   {
     igl::read_triangle_mesh(mesh_path,V,F);
@@ -1204,6 +1302,26 @@ int main(int argc, char * argv[])
   igl::cotmatrix(V,F,L);
   Eigen::SparseMatrix<double> M;
   igl::massmatrix(V,F,igl::MASSMATRIX_TYPE_DEFAULT,M);
+
+#ifdef IGL_WITH_CHOLMOD
+  {
+    // Warm-up: whichever solver happens to run first in the k=1 loop below
+    // (currently CholmodSupernodalLLT) otherwise absorbs one-time costs that
+    // have nothing to do with its own algorithm -- shared library lazy
+    // symbol resolution, CHOLMOD's first internal heap growth, first-touch
+    // page faults -- into its timed factor step. Measured on this machine:
+    // that made CholmodSupernodalLLT's k=1 factor time look *slower* than
+    // its own k=2 factor time despite k=2's system having strictly more
+    // fill-in, purely because k=1 paid this one-time cost and k=2 didn't.
+    // Pay it here instead, on a throwaway 3x3 SPD system, before any timed
+    // solve starts.
+    Eigen::SparseMatrix<double> warm(3,3);
+    warm.setIdentity();
+    Eigen::CholmodSupernodalLLT<Eigen::SparseMatrix<double>> warm_factor;
+    warm_factor.compute(warm);
+    (void)warm_factor.solve(Eigen::MatrixXd::Ones(3,1));
+  }
+#endif
 
   // k=1,2,3: flattened SPD k-harmonic systems (Q=M+Wᵏ, igl::harmonic).
   // k=4,5: mixed (unflattened) biharmonic/triharmonic block systems built by
@@ -1278,6 +1396,7 @@ int main(int argc, char * argv[])
     {
       solve<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>("Eigen::SimplicialLDLT",k,Q,rhs,U);
     }
+#ifdef IGL_WITH_CATAMARI
     if(is_mixed)
     {
       solve_catamari_ldl("catamari::SparseLDL (LDLᵀ)",k,Q,rhs,U);
@@ -1286,6 +1405,10 @@ int main(int argc, char * argv[])
     {
       solve<catamari::SparseLDL<double>>("catamari::SparseLDL",k,Q,rhs,U);
     }
+#endif
+#ifdef IGL_WITH_MA57
+    solve_symla(is_mixed ? "MA57 (symla, LDLᵀ)" : "MA57 (symla)",k,Q,rhs,U);
+#endif
 #ifdef IGL_WITH_NASOQ
     if(k == 5)
     {
