@@ -1010,7 +1010,18 @@ void solve_nasoq_lbl(
 
   Eigen::VectorXd rhs0 = rhs.col(0);
   nasoq::SolverSettings solver(&A, rhs0.data());
-  solver.ldl_variant = 4;
+  // ldl_variant=4 ("Parallel SBK") only actually factorizes when NASOQ was
+  // compiled with OpenMP: nasoq/src/QP/linear_solver_wrapper.cpp wraps its
+  // call to ldl_left_sn_parallel_02() in "#ifdef OPENMP" with no fallback,
+  // so numerical_factorization() silently returns success (ret_val stays
+  // 0) having done nothing whenever OPENMP isn't defined -- and CMake's
+  // find_package(OpenMP) fails for AppleClang on this Mac, so NASOQ never
+  // compiles the parallel kernels or defines OPENMP here. The result was a
+  // deterministic NaN on every solve (uninitialized L/D factor buffers),
+  // not a BLAS/numerical bug. Since we force num_thread=1 below anyway
+  // (see comment), use the serial supernodal variant (2), which has no
+  // OpenMP dependency and is unconditionally compiled/correct.
+  solver.ldl_variant = 2;
   solver.solver_mode = 0;
   solver.reg_diag = std::pow(10, -9);
   // SolverSettings' own num_thread field (used for MKL's SET_BLAS_THREAD and

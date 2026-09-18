@@ -15,7 +15,13 @@
 	url = https://github.com/libigl/libigl
 [submodule "nasoq"]
 	path = nasoq
-	url = https://github.com/sympiler/nasoq.git
+	# Temporarily pointed at alecjacobson's fork/branch, which fixes a
+	# 64-bit/32-bit integer ABI mismatch between vendored CLAPACK and
+	# OpenBLAS that made NASOQ_USE_CLAPACK=ON + NASOQ_BLAS_BACKEND=OpenBLAS
+	# (used on Apple Silicon, where there's no Intel MKL) return NaN on
+	# every solve. See https://github.com/sympiler/nasoq/pull/34; repoint
+	# back to https://github.com/sympiler/nasoq.git once that merges.
+	url = https://github.com/alecjacobson/nasoq.git
 [submodule "ma57"]
 	path = ma57
 	url = https://github.com/alecjacobson/ma57
