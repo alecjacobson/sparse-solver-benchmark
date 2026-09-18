@@ -16,41 +16,6 @@ Warp rows regenerated separately via [`warp_bench/`](../warp_bench/) (see its
 README) and merged into the ranking below by total (factor + solve) time,
 same as the C++ side's own ranking logic.
 
-> [!NOTE]
-> **An earlier version of this report showed `Eigen::CholmodSupernodalLLT`'s
-> Harmonic (k=1) factor time as slower than its own Biharmonic (k=2) time**,
-> which would be backwards (k=2 has strictly more fill-in). Root-caused: that
-> run shared the machine with another, unrelated CPU-heavy build/benchmark
-> process (128-thread contention, confirmed via `ps`/`uptime` at the time),
-> not a real property of CHOLMOD or this benchmark's code. Re-measured
-> uncontended (`--only cholmod`, machine otherwise idle): 6.1s / 24s / 40s for
-> k=1/2/3, monotonically increasing as expected. Lesson: always check for
-> contention (`uptime`, `ps aux --sort=-%cpu`) before trusting a timing
-> anomaly on a shared machine.
-
-> [!NOTE]
-> **`Eigen::CG<IncompleteCholesky>` (renamed from `Eigen::CG<IncompleteLUT>`)
-> converges on k=1 but fails to reach the backward-error target in time on
-> k=2/k=3**, where the old `IncompleteLUT`-paired version used to converge.
-> `IncompleteCholesky` is the theoretically correct preconditioner for CG (see
-> README's "How is accuracy measured?" section) -- `IncompleteLUT` is a
-> general, non-symmetric ILU that has no business being paired with CG's
-> SPD-preconditioner requirement, and was swapped out for exactly that
-> reason. This result shows that theoretical correctness didn't translate to
-> better empirical convergence on k=2/k=3's badly-scaled systems here --
-> `IncompleteLUT`'s asymmetric factorization happened to be a more effective
-> preconditioner in practice on this specific matrix, despite the
-> convergence-theory mismatch. A genuine, if slightly counterintuitive,
-> result -- not a bug in the swap.
-
-> [!NOTE]
-> **MA57 (symla) is dramatically slower than every other solver here at this
-> scale** (33s-3600s factor time vs. single-digit-to-tens of seconds for
-> everything else) despite matching their accuracy. It's a new, from-scratch
-> solver (see `ma57/README.md`) without the decades of tuning behind
-> CHOLMOD/Pardiso/UMFPACK -- included here as a correctly-reported, genuine
-> result, not a bug in this benchmark's harness.
-
 # Harmonic
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
@@ -171,4 +136,39 @@ same as the C++ side's own ranking logic.
 |    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - | `Eigen::CG<IncompleteCholesky>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
+
+> [!NOTE]
+> **An earlier version of this report showed `Eigen::CholmodSupernodalLLT`'s
+> Harmonic (k=1) factor time as slower than its own Biharmonic (k=2) time**,
+> which would be backwards (k=2 has strictly more fill-in). Root-caused: that
+> run shared the machine with another, unrelated CPU-heavy build/benchmark
+> process (128-thread contention, confirmed via `ps`/`uptime` at the time),
+> not a real property of CHOLMOD or this benchmark's code. Re-measured
+> uncontended (`--only cholmod`, machine otherwise idle): 6.1s / 24s / 40s for
+> k=1/2/3, monotonically increasing as expected. Lesson: always check for
+> contention (`uptime`, `ps aux --sort=-%cpu`) before trusting a timing
+> anomaly on a shared machine.
+
+> [!NOTE]
+> **`Eigen::CG<IncompleteCholesky>` (renamed from `Eigen::CG<IncompleteLUT>`)
+> converges on k=1 but fails to reach the backward-error target in time on
+> k=2/k=3**, where the old `IncompleteLUT`-paired version used to converge.
+> `IncompleteCholesky` is the theoretically correct preconditioner for CG (see
+> README's "How is accuracy measured?" section) -- `IncompleteLUT` is a
+> general, non-symmetric ILU that has no business being paired with CG's
+> SPD-preconditioner requirement, and was swapped out for exactly that
+> reason. This result shows that theoretical correctness didn't translate to
+> better empirical convergence on k=2/k=3's badly-scaled systems here --
+> `IncompleteLUT`'s asymmetric factorization happened to be a more effective
+> preconditioner in practice on this specific matrix, despite the
+> convergence-theory mismatch. A genuine, if slightly counterintuitive,
+> result -- not a bug in the swap.
+
+> [!NOTE]
+> **MA57 (symla) is dramatically slower than every other solver here at this
+> scale** (33s-3600s factor time vs. single-digit-to-tens of seconds for
+> everything else) despite matching their accuracy. It's a new, from-scratch
+> solver (see `ma57/README.md`) without the decades of tuning behind
+> CHOLMOD/Pardiso/UMFPACK -- included here as a correctly-reported, genuine
+> result, not a bug in this benchmark's harness.
 

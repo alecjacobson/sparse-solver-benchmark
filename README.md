@@ -299,7 +299,9 @@ the top of the file. Results aren't comparable across machines (different
 CPU, GPU, core count, memory bandwidth), so rather than one shared leaderboard
 this project keeps a report card per machine it's been run on -- add your
 own by running the benchmark and dropping a new file in that folder, named
-after your hardware.
+after your hardware. Put any `[!NOTE]` callouts (explaining an anomaly,
+a new solver, a fix applied since the last run, etc.) *after* the result
+tables, not before -- the tables are what someone's scanning for first.
 
 Obviously [YMMV](https://www.google.com/search?q=YMMV), if you find something
 interesting [let me know!](https://github.com/alecjacobson/sparse-solver-benchmark/issues).

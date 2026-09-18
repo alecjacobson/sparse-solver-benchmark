@@ -1118,6 +1118,18 @@ static std::string machine_info()
 // same reason: no per-k tuning needed anymore.
 static const double kBackwardErrorDivergedThreshold = 1e-6;
 
+// GitHub's markdown renderer parses a bare "<...>" in a table cell as an
+// unrecognized HTML tag and silently strips it -- e.g.
+// "Eigen::BiCGSTAB<IncompleteLUT>" rendered as just "Eigen::BiCGSTAB" on the
+// GitHub page (raw file content was always correct; only the *rendered* page
+// was wrong). Wrap any name containing '<' in backticks so it renders as a
+// literal code span instead.
+static std::string markdown_escape_name(const std::string & name)
+{
+  if(name.find('<') == std::string::npos) return name;
+  return "`" + name + "`";
+}
+
 static void print_leaderboard(int k)
 {
   std::vector<Result> rows;
@@ -1185,7 +1197,7 @@ static void print_leaderboard(int k)
   {
     if(r.skipped)
     {
-      printf("|    - | %32s |           - |           - | skipped: %s |\n",r.name.c_str(),r.skip_reason.c_str());
+      printf("|    - | %32s |           - |           - | skipped: %s |\n",markdown_escape_name(r.name).c_str(),r.skip_reason.c_str());
       continue;
     }
     rank++;
@@ -1195,7 +1207,7 @@ static void print_leaderboard(int k)
     // with a dagger (and a footnote, matching the existing "(fused)*"
     // pattern) rather than let it read as equivalent to a genuinely
     // converged row's number.
-    std::string display_name = r.name;
+    std::string display_name = markdown_escape_name(r.name);
     if(r.timed_out)
     {
       any_timed_out = true;
