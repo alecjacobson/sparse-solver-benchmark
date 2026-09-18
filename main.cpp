@@ -1465,7 +1465,14 @@ int main(int argc, char * argv[])
 #endif
     solve<Eigen::SparseLU<Eigen::SparseMatrix<double>,Eigen::COLAMDOrdering<int>>>("Eigen::SparseLU",k,Q,rhs,U);
     solve<Eigen::BiCGSTAB<Eigen::SparseMatrix<double>,Eigen::IncompleteLUT<double>>>("Eigen::BiCGSTAB<IncompleteLUT>",k,Q,rhs,U);
-    solve<Eigen::ConjugateGradient<Eigen::SparseMatrix<double>,Eigen::Lower,Eigen::IncompleteLUT<double>>>("Eigen::CG<IncompleteLUT>",k,Q,rhs,U);
+    // IncompleteLUT is a general (non-symmetric) ILU preconditioner; pairing
+    // it with CG is a theoretical mismatch (CG requires an SPD
+    // preconditioner for its convergence guarantees to hold, and IncompleteLUT
+    // makes no attempt to keep the result symmetric). IncompleteCholesky is
+    // the correct, symmetry-preserving preconditioner for CG on these SPD
+    // systems -- exactly analogous to why BiCGSTAB above (no such
+    // requirement) keeps IncompleteLUT.
+    solve<Eigen::ConjugateGradient<Eigen::SparseMatrix<double>,Eigen::Lower,Eigen::IncompleteCholesky<double>>>("Eigen::CG<IncompleteCholesky>",k,Q,rhs,U);
 
     print_leaderboard(k);
   }
