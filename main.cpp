@@ -401,6 +401,41 @@ void solve(
     false, "", false, timed_out, iterations_used);
 }
 
+#ifdef IGL_WITH_CHOLMOD_CUDA
+// CHOLMOD's own GPU-accelerated supernodal factorization (SuiteSparse's
+// CUDA path, offloading its dense supernode BLAS3 updates to cuBLAS) --
+// distinct from cuDSS/cuSOLVER above, which are separate NVIDIA libraries.
+// Same CholmodSupernodalLLT type as the CPU row, just with Common.useGPU
+// set before compute(); Eigen's wrapper exposes the underlying
+// cholmod_common via .cholmod(), same mechanism used to investigate
+// nthreads_max above. Not a solve<> specialization since the GPU flag has
+// to be set between construction and compute(), which solve<>'s generic
+// `Factor factor; factor.compute(Q);` has no hook for.
+void solve_cholmod_gpu(
+  const std::string & name,
+  int k,
+  const Eigen::SparseMatrix<double> & Q,
+  const Eigen::MatrixXd & rhs,
+  Eigen::MatrixXd & U)
+{
+  if(!should_run(name)) return;
+  Timer timer;
+  Eigen::CholmodSupernodalLLT<Eigen::SparseMatrix<double>> factor;
+  factor.cholmod().useGPU = 1;
+  factor.compute(Q);
+  const double t_factor = timer.toc();
+  if(k>=4 && factor.info() != Eigen::Success)
+  {
+    record(k, name, t_factor, 0, 0, true,
+      std::string("factorization failed: ") + eigen_info_string(factor.info()));
+    return;
+  }
+  U = factor.solve(rhs);
+  const double t_solve = timer.toc();
+  record(k, name, t_factor, t_solve, backward_error(Q,rhs,U));
+}
+#endif
+
 #ifdef IGL_WITH_CATAMARI
 template <>
 void solve<catamari::SparseLDL<double>>(
@@ -1363,6 +1398,9 @@ int main(int argc, char * argv[])
     Eigen::MatrixXd U;
 #ifdef IGL_WITH_CHOLMOD
     solve<Eigen::CholmodSupernodalLLT<Eigen::SparseMatrix<double>>>("Eigen::CholmodSupernodalLLT",k,Q,rhs,U);
+#ifdef IGL_WITH_CHOLMOD_CUDA
+    solve_cholmod_gpu("Eigen::CholmodSupernodalLLT (CUDA)",k,Q,rhs,U);
+#endif
     if(k == 5)
     {
       // UmfPackLU's own internal MKL BLAS3 calls (umfdi_blas3_update) spin

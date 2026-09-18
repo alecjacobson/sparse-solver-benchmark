@@ -72,61 +72,22 @@ if(IGL_WITH_CHOLMOD AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/SuiteSparse/CMak
   set(IGL_WITH_CHOLMOD OFF)
 endif()
 
-if(IGL_WITH_GPL)
-  if(IGL_WITH_CHOLMOD)
-    message(STATUS "Using fastest solver: Cholmod")
-    target_compile_definitions(${PROJECT_NAME} PUBLIC -DIGL_WITH_CHOLMOD)
-    # heavy handed way of including and linking to SuiteSparse, surely there's a
-    # more modern cmake way. This still builds umfpack, spqr and klu though those
-    # are not used.
-    set(WITH_FORTRAN OFF CACHE BOOL "")
-    set(WITH_CUDA    OFF CACHE BOOL "")
-    set(WITH_OPENMP  OFF CACHE BOOL "")
-    set(WITH_DEMOS OFF CACHE BOOL "")
-    set(BUILD_CXSPARSE OFF CACHE BOOL "")
-    # This SuiteSparse fork's CHOLMOD renamed the old WITH_PARTITION toggle to
-    # WITH_METIS (default ON), which this project's CMakeLists never updated
-    # to match, so METIS-based nested-dissection ordering was silently
-    # enabled. A/B timing on this machine (full dragon mesh, k=1..3) showed it
-    # makes no measurable difference for k=1,2 (within run-to-run noise) but a
-    # ~4x factorization slowdown for k=3 (1.1s vs 4.4s) -- CHOLMOD's default
-    # AMD-based ordering is a much better fit than METIS for the heavy fill-in
-    # the triharmonic system produces. Disable it.
-    set(WITH_METIS OFF CACHE BOOL "")
-    if(IGL_WITH_MKL)
-      # SuiteSparse's own find_package(BLAS) is independent of our FindMKL.cmake
-      # above and could in principle pick a different MKL threading layer than
-      # our own linkage, which was once diagnosed (via gdb) as a ~100x
-      # thread-pool-contention slowdown and "fixed" by forcing SuiteSparse's
-      # BLAS to Intel10_64lp_seq (sequential/non-threaded). That fix was a
-      # bigger hammer than needed: it also serializes CHOLMOD/UMFPACK's own
-      # internal BLAS3 calls, and A/B timing on this machine (full dragon
-      # mesh, k=1..3) showed plain threaded MKL BLAS is faster across the
-      # board (5.7/25/38s vs. 6.5/31/56s factor time) with no reappearance of
-      # the original contention. Leave BLAS threaded; if the contention bug
-      # resurfaces, this is the first place to look.
-      set(BLA_VENDOR Intel10_64lp CACHE STRING "")
-    endif()
-    add_subdirectory("SuiteSparse/")
-    target_link_libraries(${PROJECT_NAME} cholmod umfpack)
-  else()
-    if(NOT DEFINED IGL_WITH_MKL)
-      message(WARNING "Using slower solver: SimplicialLLT")
-    endif()
-    target_compile_definitions(${PROJECT_NAME} PUBLIC -DIGL_WITH_GPL)
-  endif()
-else()
-  message(WARNING "Using slowest solver: SparseLU")
-endif()
-
-if(IGL_WITH_CUDSS)
-  # nvcc typically isn't on PATH even when a CUDA toolkit is installed. Besides
-  # the standard system locations, also probe two conventions used on GPU dev
-  # machines that don't have a system/apt CUDA install: a toolkit tree
-  # assembled under $HOME (e.g. for Warp's native builds -- see CLAUDE.md's
-  # WARP_CUDA_PATH note) and the CUDA_ROOT env var some sibling projects on
-  # such machines already use to point at exactly that. All of these are
-  # no-ops (glob to nothing, hint unused) on a machine that doesn't have them.
+# --- CUDA toolkit detection, shared by CHOLMOD's own GPU-accelerated
+# factorization (SuiteSparse's WITH_CUDA, below) and IGL_WITH_CUDSS's
+# cuDSS/cuSOLVER (further down) -- both need CMAKE_CUDA_COMPILER set BEFORE
+# add_subdirectory("SuiteSparse/") runs, since SuiteSparse's own CMakeLists
+# calls enable_language(CUDA) itself based on whether CMAKE_CUDA_COMPILER is
+# already found at that point.
+#
+# nvcc typically isn't on PATH even when a CUDA toolkit is installed. Besides
+# the standard system locations, also probe two conventions used on GPU dev
+# machines that don't have a system/apt CUDA install: a toolkit tree
+# assembled under $HOME (e.g. for Warp's native builds -- see CLAUDE.md's
+# WARP_CUDA_PATH note) and the CUDA_ROOT env var some sibling projects on
+# such machines already use to point at exactly that. All of these are
+# no-ops (glob to nothing, hint unused) on a machine that doesn't have them.
+set(IGL_HAVE_CUDA_COMPILER OFF)
+if(IGL_WITH_CUDSS OR IGL_WITH_CHOLMOD)
   file(GLOB _home_cuda_bin_dirs "$ENV{HOME}/warp-cuda/*/bin" "$ENV{HOME}/projects/cuda*/bin")
   find_program(CMAKE_CUDA_COMPILER nvcc
     HINTS /usr/local/cuda/bin $ENV{CUDA_HOME}/bin $ENV{CUDA_PATH}/bin $ENV{CUDA_ROOT}/bin
@@ -135,26 +96,30 @@ if(IGL_WITH_CUDSS)
   check_language(CUDA)
   if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
+    # enable_language(CUDA) leaves CMAKE_CUDA_HOST_COMPILER defined-but-empty
+    # in this project's scope; SuiteSparse's own CMakeLists checks
+    # `if(DEFINED CMAKE_CUDA_HOST_COMPILER)` before falling back to
+    # CMAKE_CXX_COMPILER, so it inherits that empty value instead of our
+    # actual g++ and passes nvcc a blank `--compiler-bindir=`, which fails
+    # with "nvcc fatal: Failed to preprocess host compiler properties." Set
+    # it explicitly so both our own CUDA usage and SuiteSparse's inherit a
+    # real host compiler.
+    set(CMAKE_CUDA_HOST_COMPILER "${CMAKE_CXX_COMPILER}")
     find_package(CUDAToolkit REQUIRED)
+    set(IGL_HAVE_CUDA_COMPILER ON)
 
     # On a machine whose CUDA math libraries come from pip (nvidia-cusolver-cu12/
-    # nvidia-cusparse-cu12/nvidia-cudss-cu12 -- common as transitive PyTorch/Warp
-    # dependencies, e.g. via `uv`/`pip install torch`) rather than a system/apt
-    # CUDA install, `enable_language(CUDA)` + `find_package(CUDAToolkit)` above
+    # nvidia-cusparse-cu12/nvidia-cublas-cu12/nvidia-cudss-cu12 -- common as
+    # transitive PyTorch/Warp dependencies, e.g. via `uv`/`pip install torch`)
+    # rather than a system/apt CUDA install, `find_package(CUDAToolkit)` above
     # only gives us what's actually inside the nvcc toolkit tree (nvcc itself,
-    # cudart) -- CUDA::cusolver/CUDA::cusparse targets won't exist in that
-    # case, since those libraries live in a completely separate pip
-    # site-packages tree, not next to nvcc. Ask python where that tree is and
-    # fall back to it -- unconditionally, not just when cusolver/cusparse are
-    # missing: cuDSS itself has no apt/system package at all on Debian/Ubuntu
-    # (only libcudss0-dev-cuda-12 from NVIDIA's own apt repo, which may not be
-    # installed even when cusolver/cusparse are, e.g. via system CUDA
-    # libraries installed for some other purpose), so it needs this fallback
-    # even on a machine where cusolver/cusparse already resolve normally.
-    # Those wheels also ship only version-suffixed .so files (e.g.
-    # libcusolver.so.11, no unversioned libcusolver.so symlink), which
-    # find_library's normal lib<name>.so naming convention won't match even
-    # with the right search path -- file(GLOB) sidesteps that.
+    # cudart) -- CUDA::cusolver/CUDA::cusparse/CUDA::cublas targets won't
+    # exist in that case, since those libraries live in a completely separate
+    # pip site-packages tree, not next to nvcc. Ask python where that tree is
+    # and fall back to it. Those wheels also ship only version-suffixed .so
+    # files (e.g. libcusolver.so.11, no unversioned libcusolver.so symlink),
+    # which find_library's normal lib<name>.so naming convention won't match
+    # even with the right search path -- file(GLOB) sidesteps that.
     set(_pip_nvidia_dir "")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_EXECUTABLE)
@@ -194,6 +159,94 @@ if(IGL_WITH_CUDSS)
       endif()
     endif()
 
+    # SuiteSparse's own CMakeLists hardcodes the literal target name
+    # CUDA::cublas (target_link_libraries/$<TARGET_PROPERTY:CUDA::cublas,...>
+    # in its CHOLMOD GPU block), so -- unlike cusolver/cusparse above, which
+    # we reference via our own CUSOLVER_TARGET/CUSPARSE_TARGET indirection --
+    # this one must be created under that exact name if missing.
+    if(NOT TARGET CUDA::cublas AND _pip_nvidia_dir)
+      find_path(CUBLAS_INCLUDE_DIR cublas_v2.h HINTS "${_pip_nvidia_dir}/cublas/include")
+      file(GLOB CUBLAS_LIBRARY "${_pip_nvidia_dir}/cublas/lib/libcublas.so*")
+      if(CUBLAS_INCLUDE_DIR AND CUBLAS_LIBRARY)
+        list(GET CUBLAS_LIBRARY 0 CUBLAS_LIBRARY)
+        add_library(CUDA::cublas SHARED IMPORTED GLOBAL)
+        set_target_properties(CUDA::cublas PROPERTIES
+          IMPORTED_LOCATION "${CUBLAS_LIBRARY}"
+          INTERFACE_INCLUDE_DIRECTORIES "${CUBLAS_INCLUDE_DIR}")
+      endif()
+    endif()
+  endif()
+endif()
+
+if(IGL_WITH_GPL)
+  if(IGL_WITH_CHOLMOD)
+    message(STATUS "Using fastest solver: Cholmod")
+    target_compile_definitions(${PROJECT_NAME} PUBLIC -DIGL_WITH_CHOLMOD)
+    # heavy handed way of including and linking to SuiteSparse, surely there's a
+    # more modern cmake way. This still builds umfpack, spqr and klu though those
+    # are not used.
+    set(WITH_FORTRAN OFF CACHE BOOL "")
+    # GPU-accelerated supernodal factorization (CHOLMOD's own CUDA path, not
+    # to be confused with cuDSS/cuSOLVER below -- this is literally CHOLMOD
+    # offloading its own dense supernode BLAS3 updates to the GPU via cuBLAS).
+    # Needs both a CUDA compiler and CUDA::cublas (see the detection block
+    # above); gracefully stays on CPU-only CHOLMOD otherwise.
+    if(IGL_HAVE_CUDA_COMPILER AND TARGET CUDA::cublas)
+      set(WITH_CUDA ON CACHE BOOL "")
+    else()
+      set(WITH_CUDA OFF CACHE BOOL "")
+    endif()
+    set(WITH_OPENMP  OFF CACHE BOOL "")
+    set(WITH_DEMOS OFF CACHE BOOL "")
+    set(BUILD_CXSPARSE OFF CACHE BOOL "")
+    # This SuiteSparse fork's CHOLMOD renamed the old WITH_PARTITION toggle to
+    # WITH_METIS (default ON), which this project's CMakeLists never updated
+    # to match, so METIS-based nested-dissection ordering was silently
+    # enabled. A/B timing on this machine (full dragon mesh, k=1..3) showed it
+    # makes no measurable difference for k=1,2 (within run-to-run noise) but a
+    # ~4x factorization slowdown for k=3 (1.1s vs 4.4s) -- CHOLMOD's default
+    # AMD-based ordering is a much better fit than METIS for the heavy fill-in
+    # the triharmonic system produces. Disable it.
+    set(WITH_METIS OFF CACHE BOOL "")
+    if(IGL_WITH_MKL)
+      # SuiteSparse's own find_package(BLAS) is independent of our FindMKL.cmake
+      # above and could in principle pick a different MKL threading layer than
+      # our own linkage, which was once diagnosed (via gdb) as a ~100x
+      # thread-pool-contention slowdown and "fixed" by forcing SuiteSparse's
+      # BLAS to Intel10_64lp_seq (sequential/non-threaded). That fix was a
+      # bigger hammer than needed: it also serializes CHOLMOD/UMFPACK's own
+      # internal BLAS3 calls, and A/B timing on this machine (full dragon
+      # mesh, k=1..3) showed plain threaded MKL BLAS is faster across the
+      # board (5.7/25/38s vs. 6.5/31/56s factor time) with no reappearance of
+      # the original contention. Leave BLAS threaded; if the contention bug
+      # resurfaces, this is the first place to look.
+      set(BLA_VENDOR Intel10_64lp CACHE STRING "")
+    endif()
+    add_subdirectory("SuiteSparse/")
+    target_link_libraries(${PROJECT_NAME} cholmod umfpack)
+    # WITH_CUDA may have been forced back OFF inside SuiteSparse's own
+    # cmake_dependent_option handling (e.g. WITH_LICENSE mismatch) even
+    # though we requested it above -- check the actual outcome, not our
+    # request, before telling main.cpp the GPU CHOLMOD path exists.
+    if(WITH_CUDA)
+      message(STATUS "CHOLMOD built with its own CUDA-accelerated supernodal factorization")
+      target_compile_definitions(${PROJECT_NAME} PUBLIC -DIGL_WITH_CHOLMOD_CUDA)
+    endif()
+  else()
+    if(NOT DEFINED IGL_WITH_MKL)
+      message(WARNING "Using slower solver: SimplicialLLT")
+    endif()
+    target_compile_definitions(${PROJECT_NAME} PUBLIC -DIGL_WITH_GPL)
+  endif()
+else()
+  message(WARNING "Using slowest solver: SparseLU")
+endif()
+
+if(IGL_WITH_CUDSS)
+  # CMAKE_CUDA_COMPILER/CUDAToolkit/CUSOLVER_TARGET/CUSPARSE_TARGET/
+  # _pip_nvidia_dir were already resolved by the shared CUDA-detection block
+  # above (before SuiteSparse's add_subdirectory, which needs them earlier).
+  if(IGL_HAVE_CUDA_COMPILER)
     # The libcudss0-dev-cuda-12 apt package's own cudss-config.cmake assumes
     # headers live under the same prefix as the libraries; Debian/Ubuntu's
     # packaging splits them (/usr/include/libcudss/<ver> vs.

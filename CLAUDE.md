@@ -43,6 +43,20 @@ Key CMake options (in `CMakeLists.txt`, all default ON, all autoconfigure —
 each probes its own submodule/system dependency and turns itself OFF with a
 warning if unavailable, rather than hard-failing `cmake` configure):
 - `IGL_WITH_CHOLMOD` — build/link SuiteSparse (CHOLMOD + UMFPACK) as the fastest solver path.
+  Also opportunistically enables SuiteSparse's own `WITH_CUDA` (CHOLMOD's GPU-accelerated
+  supernodal factorization via cuBLAS — a separate `Eigen::CholmodSupernodalLLT (CUDA)`
+  leaderboard row, distinct from cuDSS/cuSOLVER) whenever a CUDA compiler/`CUDA::cublas`
+  are available — see the shared CUDA-detection block below `IGL_WITH_CHOLMOD`'s submodule
+  check in `CMakeLists.txt` (runs *before* `add_subdirectory("SuiteSparse/")`, since
+  SuiteSparse's own CMakeLists needs `CMAKE_CUDA_COMPILER` already set at that point).
+  One non-obvious fix baked into that block: `enable_language(CUDA)` leaves
+  `CMAKE_CUDA_HOST_COMPILER` defined-but-empty in this project's scope, which SuiteSparse's
+  CMakeLists then inherits instead of falling back to `CMAKE_CXX_COMPILER`, passing nvcc a
+  blank `--compiler-bindir=` that fails with "nvcc fatal: Failed to preprocess host compiler
+  properties" — fixed by setting `CMAKE_CUDA_HOST_COMPILER` explicitly. Gracefully degrades
+  to CPU-only at runtime too: CHOLMOD's own `cholmod_gpu_probe` checks `cudaGetDeviceCount()`
+  and resets `useGPU` to `FALSE` (not a crash) if no device is found, so this is safe on
+  CI's GPU-less hosted runners even though they do have the CUDA toolkit installed.
 - `IGL_WITH_MKL` — link Intel MKL and enable `Eigen::PardisoLLT`/`PardisoLDLT`.
   Deliberately does NOT define `EIGEN_USE_MKL_ALL` — see the `[!WARNING]` in
   README about why (a documented ~100x slowdown it causes in `SparseLU`).
