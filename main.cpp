@@ -23,6 +23,9 @@
 #include <Eigen/CholmodSupport>
 #include <Eigen/UmfPackSupport>
 #endif
+#ifdef IGL_WITH_ACCELERATE_SPARSE
+#include <Accelerate/Accelerate.h>
+#endif
 #include <unsupported/Eigen/SparseExtra>
 #ifdef IGL_WITH_CUDSS
 #include <cuda_runtime_api.h>
@@ -855,6 +858,83 @@ void solve_symla(
 }
 #endif // IGL_WITH_MA57
 
+#ifdef IGL_WITH_ACCELERATE_SPARSE
+// Apple's Accelerate "Sparse Solvers" library (Accelerate/Sparse/Solve.h,
+// macOS 10.13+): ships in the OS on every Mac, no extra dependency to
+// vendor, unlike CHOLMOD (SuiteSparse submodule) or MKL (external install).
+// Its C API doesn't share Eigen's factor.info()/compute() interface, so --
+// like MA57/catamari above -- it gets its own standalone function. Only
+// Cholesky is exercised (this benchmark's flattened k=1..3 systems are
+// SPD); the mixed/indefinite k=4,5 systems are expected to fail
+// factorization, same as every other SPD-only solver here
+// (CholmodSupernodalLLT, SimplicialLLT).
+void solve_accelerate_sparse(
+  const std::string & name,
+  int k,
+  const Eigen::SparseMatrix<double> & Q,
+  const Eigen::MatrixXd & rhs,
+  Eigen::MatrixXd & U)
+{
+  if(!should_run(name)) return;
+
+  // SparseConvertFromCoordinate() wants the matrix as (row,col,value)
+  // triples, restricted to one triangle for a symmetric matrix -- extract
+  // Q's lower triangle (same approach solve_nasoq_lbl above uses) and read
+  // its CSC nonzeros off directly.
+  Eigen::SparseMatrix<double> QL = Q.triangularView<Eigen::Lower>();
+  QL.makeCompressed();
+  const long nnz = QL.nonZeros();
+  std::vector<int32_t> rows(nnz), cols(nnz);
+  std::vector<double> vals(nnz);
+  {
+    long idx = 0;
+    for(int c = 0;c < QL.outerSize();++c)
+    {
+      for(Eigen::SparseMatrix<double>::InnerIterator it(QL,c);it;++it,++idx)
+      {
+        rows[idx] = (int32_t)it.row();
+        cols[idx] = (int32_t)it.col();
+        vals[idx] = it.value();
+      }
+    }
+  }
+
+  SparseAttributes_t attributes = {};
+  attributes.kind = SparseSymmetric;
+  attributes.triangle = SparseLowerTriangle;
+
+  Timer timer;
+  SparseMatrix_Double A = SparseConvertFromCoordinate(
+    (int)QL.rows(), (int)QL.cols(), nnz, /*blockSize=*/1, attributes,
+    rows.data(), cols.data(), vals.data());
+  SparseOpaqueFactorization_Double factor = SparseFactor(SparseFactorizationCholesky, A);
+  const double t_factor = timer.toc();
+  if(factor.status != SparseStatusOK)
+  {
+    SparseCleanup(factor);
+    SparseCleanup(A);
+    record(k, name, t_factor, 0, 0, true,
+      "factorization failed: status " + std::to_string((int)factor.status));
+    return;
+  }
+
+  // Accelerate's dense types are column-major, matching Eigen::MatrixXd's
+  // default storage layout -- U's own buffer is used directly as the
+  // output, no copy needed. rhs itself is copied since DenseMatrix_Double's
+  // .data is a non-const double*, even though SparseSolve only reads B.
+  Eigen::MatrixXd B = rhs;
+  U.resize(rhs.rows(), rhs.cols());
+  DenseMatrix_Double denseB = {(int)B.rows(), (int)B.cols(), (int)B.rows(), SparseAttributes_t{}, B.data()};
+  DenseMatrix_Double denseX = {(int)U.rows(), (int)U.cols(), (int)U.rows(), SparseAttributes_t{}, U.data()};
+  SparseSolve(factor, denseB, denseX);
+  const double t_solve = timer.toc();
+
+  SparseCleanup(factor);
+  SparseCleanup(A);
+  record(k, name, t_factor, t_solve, backward_error(Q,rhs,U));
+}
+#endif // IGL_WITH_ACCELERATE_SPARSE
+
 #ifdef IGL_WITH_NASOQ
 #include <nasoq/lbl_eigen.h>
 
@@ -1379,6 +1459,9 @@ int main(int argc, char * argv[])
     {
       solve<Eigen::UmfPackLU<Eigen::SparseMatrix<double>>>("Eigen::UmfPackLU",k,Q,rhs,U);
     }
+#endif
+#ifdef IGL_WITH_ACCELERATE_SPARSE
+    solve_accelerate_sparse("Accelerate SparseCholesky",k,Q,rhs,U);
 #endif
     solve<Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> >("Eigen::SimplicialLLT",k,Q,rhs,U);
     if(k == 5)
