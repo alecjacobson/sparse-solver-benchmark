@@ -63,14 +63,14 @@ same as the C++ side's own ranking logic.
 |    6 |                   warp::bicgstab | 0.00026 secs |    1.5 secs |     1.28732e-14 |
 |    7 |                     NVIDIA cuDSS |    2.3 secs | 0.0026 secs |     7.79603e-16 |
 |    8 |                        NASOQ LBL |    2.6 secs |   0.18 secs |     8.09439e-16 |
-|    9 |   Eigen::BiCGSTAB<IncompleteLUT> |    1.6 secs |    1.4 secs |     4.16213e-16 |
+|    9 | `Eigen::BiCGSTAB<IncompleteLUT>` |    1.6 secs |    1.4 secs |     4.16213e-16 |
 |   10 |                      warp::gmres | 0.00032 secs |    5.1 secs |     5.99556e-16 |
 |   11 |                Eigen::PardisoLLT |    3.9 secs |    1.3 secs |     2.91357e-16 |
 |   12 |                  Eigen::SparseLU |    5.2 secs |   0.18 secs |     3.97062e-15 |
 |   13 |               Eigen::PardisoLDLT |    4.4 secs |    1.5 secs |     3.07192e-16 |
 |   14 |      Eigen::CholmodSupernodalLLT |    6.1 secs |      1 secs |     8.32449e-16 |
 |   15 |        NVIDIA cuSOLVER (Sp Chol) |      (fused)* |    9.3 secs |     1.10125e-15 |
-|   16 |    Eigen::CG<IncompleteCholesky> |   0.53 secs |     20 secs |      5.5807e-09 |
+|   16 | `Eigen::CG<IncompleteCholesky>` |   0.53 secs |     20 secs |      5.5807e-09 |
 |   17 |                 Eigen::UmfPackLU |     20 secs |   0.62 secs |     3.31624e-16 |
 |   18 |                     MA57 (symla) |     33 secs |   0.23 secs |     9.28829e-16 |
 
@@ -88,7 +88,7 @@ same as the C++ side's own ranking logic.
 |    6 |            Eigen::SimplicialLDLT |    9.3 secs |   0.41 secs |     4.24456e-15 |
 |    7 |             Eigen::SimplicialLLT |    9.4 secs |    0.4 secs |     1.12776e-14 |
 |    8 |              catamari::SparseLDL |     11 secs |   0.36 secs |     7.11499e-15 |
-|    9 |   Eigen::BiCGSTAB<IncompleteLUT> |     11 secs |    4.8 secs |     5.71533e-16 |
+|    9 | `Eigen::BiCGSTAB<IncompleteLUT>` |     11 secs |    4.8 secs |     5.71533e-16 |
 |   10 |        NVIDIA cuSOLVER (Sp Chol) |      (fused)* |     20 secs |     6.30463e-15 |
 |   11 |      Eigen::CholmodSupernodalLLT |     24 secs |    5.2 secs |     3.07552e-15 |
 |   12 |                  Eigen::SparseLU |     36 secs |   0.85 secs |     5.55392e-12 |
@@ -97,7 +97,7 @@ same as the C++ side's own ranking logic.
 |    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 0.0001483 exceeds 1e-06 |
 |    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
 |    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: backward error 0.2168 exceeds 1e-06 |
-|    - |    Eigen::CG<IncompleteCholesky> |           - |           - | skipped: did not actually succeed: backward error 0.01691 exceeds 1e-06 |
+|    - | `Eigen::CG<IncompleteCholesky>` |           - |           - | skipped: did not actually succeed: backward error 0.01691 exceeds 1e-06 |
 
 *(fused): cuSOLVER's `cusolverSpDcsrlsvchol` has no separate factor step -- see README.
 
@@ -118,11 +118,11 @@ same as the C++ side's own ranking logic.
 |   11 |                         warp::cr | 0.00024 secs | 7.5e+02 secs |     1.84984e-08 |
 |   12 |                     MA57 (symla) | 3.6e+03 secs |   0.87 secs |      4.8854e-14 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
-|    - |   Eigen::BiCGSTAB<IncompleteLUT> |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
+|    - | `Eigen::BiCGSTAB<IncompleteLUT>` |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
 |    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 0.0001877 exceeds 1e-06 |
 |    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: backward error 0.002162 exceeds 1e-06 |
 |    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: backward error 0.8132 exceeds 1e-06 |
-|    - |    Eigen::CG<IncompleteCholesky> |           - |           - | skipped: did not actually succeed: backward error 0.005675 exceeds 1e-06 |
+|    - | `Eigen::CG<IncompleteCholesky>` |           - |           - | skipped: did not actually succeed: backward error 0.005675 exceeds 1e-06 |
 
 *(fused): cuSOLVER's `cusolverSpDcsrlsvchol` has no separate factor step -- see README.
 
@@ -140,14 +140,14 @@ same as the C++ side's own ranking logic.
 |    8 |               MA57 (symla, LDLᵀ) | 5.9e+02 secs |    1.1 secs |     5.12888e-08 |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |                Eigen::PardisoLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
-|    - |   Eigen::BiCGSTAB<IncompleteLUT> |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
+|    - | `Eigen::BiCGSTAB<IncompleteLUT>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |        NVIDIA cuSOLVER (Sp Chol) |           - |           - | skipped: no indefinite/LDLT solver in this cuSOLVER version |
 |    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |                         warp::cr |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
 |    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: backward error 0.8748 exceeds 1e-06 |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
-|    - |    Eigen::CG<IncompleteCholesky> |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
+|    - | `Eigen::CG<IncompleteCholesky>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 
 # Mixed Triharmonic (unflattened, indefinite)
 
@@ -162,7 +162,7 @@ same as the C++ side's own ranking logic.
 |    - |                Eigen::PardisoLLT |           - |           - | skipped: known Pardiso reordering hang on this system's sparsity pattern |
 |    - |               Eigen::PardisoLDLT |           - |           - | skipped: known Pardiso reordering hang on this system's sparsity pattern |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
-|    - |   Eigen::BiCGSTAB<IncompleteLUT> |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
+|    - | `Eigen::BiCGSTAB<IncompleteLUT>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |        NVIDIA cuSOLVER (Sp Chol) |           - |           - | skipped: no indefinite/LDLT solver in this cuSOLVER version |
 |    - |                     NVIDIA cuDSS |           - |           - | skipped: did not actually succeed: backward error 0.6692 exceeds 1e-06 |
 |    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
@@ -170,5 +170,5 @@ same as the C++ side's own ranking logic.
 |    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
-|    - |    Eigen::CG<IncompleteCholesky> |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
+|    - | `Eigen::CG<IncompleteCholesky>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 
