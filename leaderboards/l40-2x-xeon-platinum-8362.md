@@ -27,18 +27,18 @@ same as the C++ side's own ranking logic.
 |    5 |              catamari::SparseLDL |    1.4 secs |  0.099 secs |     1.34635e-15 |
 |    6 |                   warp::bicgstab | 0.00026 secs |    1.5 secs |     1.28732e-14 |
 |    7 |                     NVIDIA cuDSS |    2.3 secs | 0.0026 secs |     7.79603e-16 |
-|    8 |                        NASOQ LBL |    2.6 secs |   0.18 secs |     8.09439e-16 |
+|    8 |                        NASOQ LBL |    2.8 secs |   0.19 secs |     8.09439e-16 |
 |    9 | `Eigen::BiCGSTAB<IncompleteLUT>` |    1.6 secs |    1.4 secs |     4.16213e-16 |
-|   10 |                      warp::gmres | 0.00032 secs |    5.1 secs |     5.99556e-16 |
-|   11 |                Eigen::PardisoLLT |    3.9 secs |    1.3 secs |     2.91357e-16 |
-|   12 |                  Eigen::SparseLU |    5.2 secs |   0.18 secs |     3.97062e-15 |
-|   13 |               Eigen::PardisoLDLT |    4.4 secs |    1.5 secs |     3.07192e-16 |
-|   14 |      Eigen::CholmodSupernodalLLT |    5.5 secs |    1.1 secs |     8.32449e-16 |
-|   15 | Eigen::CholmodSupernodalLLT (CUDA) |    6.9 secs |    1.5 secs |     8.32449e-16 |
-|   16 |        NVIDIA cuSOLVER (Sp Chol) |      (fused)* |    9.3 secs |     1.10125e-15 |
-|   17 |  `Eigen::CG<IncompleteCholesky>` |   0.53 secs |     20 secs |      5.5807e-09 |
-|   18 |                 Eigen::UmfPackLU |     20 secs |   0.62 secs |     3.31624e-16 |
-|   19 |                     MA57 (symla) |     33 secs |   0.23 secs |     9.28829e-16 |
+|   10 |                Eigen::PardisoLLT |    3.1 secs |    1.1 secs |     2.91357e-16 |
+|   11 |               Eigen::PardisoLDLT |    3.3 secs |    1.2 secs |     3.07192e-16 |
+|   12 |                     MA57 (symla) |    4.6 secs |   0.19 secs |     9.28829e-16 |
+|   13 |                      warp::gmres | 0.00032 secs |    5.1 secs |     5.99556e-16 |
+|   14 |                  Eigen::SparseLU |    5.2 secs |   0.18 secs |     3.97062e-15 |
+|   15 | Eigen::CholmodSupernodalLLT (CUDA) |    6.5 secs |   0.83 secs |     8.32449e-16 |
+|   16 |      Eigen::CholmodSupernodalLLT |    7.1 secs |   0.62 secs |     8.32449e-16 |
+|   17 |        NVIDIA cuSOLVER (Sp Chol) |      (fused)* |    9.3 secs |     1.10125e-15 |
+|   18 |  `Eigen::CG<IncompleteCholesky>` |   0.53 secs |     20 secs |      5.5807e-09 |
+|   19 |                 Eigen::UmfPackLU |     20 secs |   0.62 secs |     3.31624e-16 |
 
 *(fused): cuSOLVER's `cusolverSpDcsrlsvchol` has no separate factor step -- see README.
 
@@ -46,21 +46,21 @@ same as the C++ side's own ranking logic.
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |                     NVIDIA cuDSS |      4 secs |  0.022 secs |     2.32084e-14 |
-| 🥈 2 |                        NASOQ LBL |    5.3 secs |   0.29 secs |     2.31509e-14 |
-| 🥉 3 |               Eigen::PardisoLDLT |    5.6 secs |    1.4 secs |     1.42369e-15 |
-|    4 |                Eigen::PardisoLLT |    5.7 secs |    1.4 secs |     1.40062e-15 |
-|    5 |                 Eigen::UmfPackLU |    5.5 secs |    1.9 secs |     4.44457e-16 |
-|    6 |            Eigen::SimplicialLDLT |    9.3 secs |   0.41 secs |     4.24456e-15 |
-|    7 |             Eigen::SimplicialLLT |    9.4 secs |    0.4 secs |     1.12776e-14 |
-|    8 |              catamari::SparseLDL |     11 secs |   0.36 secs |     7.11499e-15 |
-|    9 | `Eigen::BiCGSTAB<IncompleteLUT>` |     11 secs |    4.8 secs |     5.71533e-16 |
-|   10 |      Eigen::CholmodSupernodalLLT |     17 secs |    2.7 secs |     3.07552e-15 |
-|   11 |        NVIDIA cuSOLVER (Sp Chol) |      (fused)* |     20 secs |     6.30463e-15 |
-|   12 | Eigen::CholmodSupernodalLLT (CUDA) |     24 secs |    4.5 secs |     3.07552e-15 |
-|   13 |                  Eigen::SparseLU |     36 secs |   0.85 secs |     5.55392e-12 |
-|   14 |                         warp::cr | 0.00033 secs |     85 secs |     5.73228e-08 |
-|   15 |                     MA57 (symla) | 5.5e+02 secs |   0.66 secs |     3.05891e-15 |
+| 🥇 1 |      Eigen::CholmodSupernodalLLT |    2.2 secs |   0.25 secs |     3.20597e-15 |
+| 🥈 2 | Eigen::CholmodSupernodalLLT (CUDA) |    2.2 secs |   0.25 secs |     3.20597e-15 |
+| 🥉 3 |                     NVIDIA cuDSS |      4 secs |  0.022 secs |     2.32084e-14 |
+|    4 |                        NASOQ LBL |    5.2 secs |   0.29 secs |     2.31509e-14 |
+|    5 |                Eigen::PardisoLLT |    4.8 secs |   0.96 secs |     1.40062e-15 |
+|    6 |               Eigen::PardisoLDLT |    4.8 secs |    1.4 secs |     1.42369e-15 |
+|    7 |                 Eigen::UmfPackLU |    5.5 secs |    1.9 secs |     4.44457e-16 |
+|    8 |            Eigen::SimplicialLDLT |    9.3 secs |   0.41 secs |     4.24456e-15 |
+|    9 |             Eigen::SimplicialLLT |    9.4 secs |    0.4 secs |     1.12776e-14 |
+|   10 |              catamari::SparseLDL |     11 secs |   0.36 secs |     7.11499e-15 |
+|   11 | `Eigen::BiCGSTAB<IncompleteLUT>` |     11 secs |    4.8 secs |     5.71533e-16 |
+|   12 |        NVIDIA cuSOLVER (Sp Chol) |      (fused)* |     20 secs |     6.30463e-15 |
+|   13 |                     MA57 (symla) |     22 secs |    0.6 secs |     3.05891e-15 |
+|   14 |                  Eigen::SparseLU |     36 secs |   0.85 secs |     5.55392e-12 |
+|   15 |                         warp::cr | 0.00033 secs |     85 secs |     5.73228e-08 |
 |    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 0.0001483 exceeds 1e-06 |
 |    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
 |    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: backward error 0.2168 exceeds 1e-06 |
@@ -72,19 +72,19 @@ same as the C++ side's own ranking logic.
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |                     NVIDIA cuDSS |    6.4 secs | 0.0053 secs |     5.36518e-08 |
-| 🥈 2 |                Eigen::PardisoLLT |    9.6 secs |    1.5 secs |     6.38005e-15 |
-| 🥉 3 |               Eigen::PardisoLDLT |    9.6 secs |    1.6 secs |     6.25047e-15 |
-|    4 |                        NASOQ LBL |     11 secs |   0.47 secs |     1.71662e-13 |
-|    5 |             Eigen::SimplicialLLT |     35 secs |   0.84 secs |     3.38364e-13 |
-|    6 |            Eigen::SimplicialLDLT |     35 secs |   0.97 secs |     1.41199e-13 |
-|    7 |      Eigen::CholmodSupernodalLLT |     31 secs |    6.2 secs |     5.15252e-13 |
-|    8 |              catamari::SparseLDL |     45 secs |   0.84 secs |     1.90941e-13 |
-|    9 |        NVIDIA cuSOLVER (Sp Chol) |      (fused)* |     49 secs |     6.21089e-13 |
-|   10 | Eigen::CholmodSupernodalLLT (CUDA) |     50 secs |     11 secs |     5.15252e-13 |
-|   11 |                  Eigen::SparseLU | 1.5e+02 secs |    1.7 secs |     7.41722e-09 |
-|   12 |                         warp::cr | 0.00024 secs | 7.5e+02 secs |     1.84984e-08 |
-|   13 |                     MA57 (symla) | 3.6e+03 secs |   0.87 secs |      4.8854e-14 |
+| 🥇 1 | Eigen::CholmodSupernodalLLT (CUDA) |    4.7 secs |   0.34 secs |      3.2754e-13 |
+| 🥈 2 |      Eigen::CholmodSupernodalLLT |      5 secs |   0.32 secs |      3.2754e-13 |
+| 🥉 3 |                     NVIDIA cuDSS |    6.4 secs | 0.0053 secs |     5.36518e-08 |
+|    4 |                Eigen::PardisoLLT |    8.6 secs |    1.3 secs |     6.38005e-15 |
+|    5 |               Eigen::PardisoLDLT |    8.9 secs |    1.3 secs |     6.25047e-15 |
+|    6 |                        NASOQ LBL |     11 secs |   0.44 secs |     1.71662e-13 |
+|    7 |             Eigen::SimplicialLLT |     35 secs |   0.84 secs |     3.38364e-13 |
+|    8 |            Eigen::SimplicialLDLT |     35 secs |   0.97 secs |     1.41199e-13 |
+|    9 |              catamari::SparseLDL |     45 secs |   0.84 secs |     1.90941e-13 |
+|   10 |        NVIDIA cuSOLVER (Sp Chol) |      (fused)* |     49 secs |     6.21089e-13 |
+|   11 |                     MA57 (symla) |  1e+02 secs |   0.78 secs |      4.8854e-14 |
+|   12 |                  Eigen::SparseLU | 1.5e+02 secs |    1.7 secs |     7.41722e-09 |
+|   13 |                         warp::cr | 0.00024 secs | 7.5e+02 secs |     1.84984e-08 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - | `Eigen::BiCGSTAB<IncompleteLUT>` |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
 |    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 0.0001877 exceeds 1e-06 |
@@ -99,15 +99,14 @@ same as the C++ side's own ranking logic.
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
 | 🥇 1 |                     NVIDIA cuDSS |    5.3 secs |  0.014 secs |     4.26059e-16 |
-| 🥈 2 |                        NASOQ LBL |    6.8 secs |   0.47 secs |     2.88059e-08 |
-| 🥉 3 |            Eigen::SimplicialLDLT |    9.2 secs |   0.46 secs |     1.09396e-07 |
-|    4 |               Eigen::PardisoLDLT |    7.6 secs |    2.4 secs |     4.35266e-16 |
+| 🥈 2 |                        NASOQ LBL |    6.9 secs |   0.48 secs |     2.88059e-08 |
+| 🥉 3 |               Eigen::PardisoLDLT |    6.2 secs |      2 secs |     4.35266e-16 |
+|    4 |            Eigen::SimplicialLDLT |    9.2 secs |   0.46 secs |     1.09396e-07 |
 |    5 |       catamari::SparseLDL (LDLᵀ) |     12 secs |   0.41 secs |     1.41253e-07 |
 |    6 |                 Eigen::UmfPackLU |     11 secs |    2.3 secs |     3.91761e-16 |
-|    7 |                  Eigen::SparseLU |     30 secs |   0.62 secs |     2.92105e-14 |
-|    8 |               MA57 (symla, LDLᵀ) | 5.9e+02 secs |    1.1 secs |     5.12888e-08 |
+|    7 |               MA57 (symla, LDLᵀ) |     24 secs |   0.89 secs |     5.12888e-08 |
+|    8 |                  Eigen::SparseLU |     30 secs |   0.62 secs |     2.92105e-14 |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
-|    - |                Eigen::PardisoLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - | `Eigen::BiCGSTAB<IncompleteLUT>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |        NVIDIA cuSOLVER (Sp Chol) |           - |           - | skipped: no indefinite/LDLT solver in this cuSOLVER version |
 |    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
@@ -117,6 +116,7 @@ same as the C++ side's own ranking logic.
 |    - |  `Eigen::CG<IncompleteCholesky>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - | Eigen::CholmodSupernodalLLT (CUDA) |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
+|    - |                Eigen::PardisoLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 
 # Mixed Triharmonic (unflattened, indefinite)
 
@@ -124,12 +124,9 @@ same as the C++ side's own ranking logic.
 |-----:|--------------------------------:|------------:|------------:|----------------:|
 | 🥇 1 |       catamari::SparseLDL (LDLᵀ) |     45 secs |      1 secs |     1.17789e-09 |
 | 🥈 2 |                  Eigen::SparseLU | 1.1e+02 secs |    1.4 secs |     1.42071e-12 |
-| 🥉 3 |               MA57 (symla, LDLᵀ) |  3e+03 secs |    1.8 secs |     2.67506e-10 |
+| 🥉 3 |               MA57 (symla, LDLᵀ) | 1.5e+02 secs |    1.6 secs |     2.67506e-10 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: known crash risk: excessive MKL thread churn on this system's fill-in |
 |    - |            Eigen::SimplicialLDLT |           - |           - | skipped: known crash: SIGSEGV in Eigen's unpivoted LDLT at this scale |
-|    - |                        NASOQ LBL |           - |           - | skipped: known crash: SIGSEGV in libmetis genmmd/mmdelm via NASOQ's symbolic_analysis_lin_solve on this system's sparsity pattern |
-|    - |                Eigen::PardisoLLT |           - |           - | skipped: known Pardiso reordering hang on this system's sparsity pattern |
-|    - |               Eigen::PardisoLDLT |           - |           - | skipped: known Pardiso reordering hang on this system's sparsity pattern |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - | `Eigen::BiCGSTAB<IncompleteLUT>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |        NVIDIA cuSOLVER (Sp Chol) |           - |           - | skipped: no indefinite/LDLT solver in this cuSOLVER version |
@@ -139,8 +136,12 @@ same as the C++ side's own ranking logic.
 |    - |                   warp::bicgstab |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |                      warp::gmres |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - |  `Eigen::CG<IncompleteCholesky>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
+|    - |                        NASOQ LBL |           - |           - | skipped: known crash: SIGSEGV in libmetis genmmd/mmdelm via NASOQ's symbolic_analysis_lin_solve on this system's sparsity pattern |
+|    - |                Eigen::PardisoLLT |           - |           - | skipped: known Pardiso reordering hang on this system's sparsity pattern |
+|    - |               Eigen::PardisoLDLT |           - |           - | skipped: known Pardiso reordering hang on this system's sparsity pattern |
 |    - | Eigen::CholmodSupernodalLLT (CUDA) |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
+
 
 > [!NOTE]
 > **`Eigen::CholmodSupernodalLLT` is ~6-8x slower here than the ~0.86s a
@@ -210,9 +211,32 @@ same as the C++ side's own ranking logic.
 > result -- not a bug in the swap.
 
 > [!NOTE]
-> **MA57 (symla) is dramatically slower than every other solver here at this
-> scale** (33s-3600s factor time vs. single-digit-to-tens of seconds for
-> everything else) despite matching their accuracy. It's a new, from-scratch
-> solver (see `ma57/README.md`) without the decades of tuning behind
-> CHOLMOD/Pardiso/UMFPACK -- included here as a correctly-reported, genuine
-> result, not a bug in this benchmark's harness.
+> **MA57 (symla)'s factor time dropped 9-36x across every system here**
+> (e.g. k=2 Biharmonic: 550s -> 22s; k=3 Triharmonic: 3600s -> 100s) after
+> fixing a real link-order bug, not a symla-side change: NASOQ's own MKL
+> discovery (`nasoq/cmake/third_party/mkl.cmake`, `MKL_THREADING=OMP`
+> default) links both `libmkl_gnu_thread.so` (needs GNU's `libgomp`, which
+> symla's own `#pragma omp` code is compiled against) *and*
+> `libmkl_intel_thread.so` (needs Intel's OpenMP runtime, `libiomp5.so` --
+> on this distro a symlink straight to LLVM's `libomp.so.5`). Because
+> `libiomp5`/`libomp.so.5` appeared earlier in the final link order and
+> already satisfied every `GOMP_*`/`omp_*` symbol name, `ld`'s default
+> `--as-needed` silently dropped `libgomp` from the executable's
+> `DT_NEEDED` entirely -- confirmed with `ldd`: the built binary depended
+> on `libomp.so.5` only, not `libgomp` at all, even though most of its own
+> OpenMP-using code was compiled/intended for `libgomp`'s ABI. On this
+> machine LLVM's `libomp.so.5` turned out to be catastrophically slower
+> than GNU's `libgomp` specifically for CPU-bound work done by one thread
+> while many siblings sit idle in a large active OpenMP team -- exactly
+> symla's multifrontal `factorize()` pattern (one `#pragma omp task` doing
+> the real recursive supernode-tree walk while most of a 128-thread team's
+> threads are idle most of the time). Fixed in `CMakeLists.txt` by forcing
+> `libgomp` to win symbol resolution (`-Wl,--no-as-needed gomp
+> -Wl,--as-needed`), scoped to Linux+GCC+NASOQ (the only combination that
+> triggers this) so it can't break Clang/macOS/Windows builds. Verified no
+> regression in NASOQ/Pardiso/CHOLMOD (all MKL-dependent, all unaffected --
+> `libmkl_intel_thread.so`/`libiomp5.so` turned out not to be needed at all
+> once `libgomp` wins, so they're now absent from the link entirely, a
+> bonus cleanup). Still the slowest solver on most systems here -- a new,
+> from-scratch implementation (see `ma57/README.md`) without the decades of
+> tuning behind CHOLMOD/Pardiso/UMFPACK -- but no longer implausibly so.

@@ -412,6 +412,49 @@ if(IGL_WITH_ACCELERATE_SPARSE)
   target_compile_definitions(${PROJECT_NAME} PUBLIC -DIGL_WITH_ACCELERATE_SPARSE)
 endif()
 
+if(IGL_WITH_NASOQ AND OpenMP_CXX_FOUND AND UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  # Force GNU libgomp to win OpenMP symbol resolution for this executable,
+  # even though NASOQ's own MKL discovery (nasoq/cmake/third_party/mkl.cmake,
+  # via find_package(MKL) with the default MKL_THREADING=OMP) also links
+  # libmkl_intel_thread.so, which needs Intel's OpenMP runtime (libiomp5.so
+  # -- on Debian/Ubuntu a symlink straight to LLVM's libomp.so.5, confirm
+  # with `readlink -f /usr/lib/x86_64-linux-gnu/libiomp5.so`). Without this,
+  # `ld`'s default --as-needed drops the earlier-declared OpenMP::OpenMP_CXX
+  # (libgomp) from this executable's DT_NEEDED entirely, once libiomp5/
+  # libomp.so.5 (pulled in later, transitively, by nasoq::eigen_interface)
+  # has already satisfied every GOMP_*/omp_* symbol GCC's own -fopenmp code
+  # needs -- confirmed directly with `ldd`: without this fix, the built
+  # binary depends on libomp.so.5 only, not libgomp at all, even though
+  # most of this binary's own OpenMP-using code (symla/MA57, and MKL's own
+  # mkl_gnu_thread.so) was compiled/intended for libgomp's ABI.
+  #
+  # That matters far beyond just "which .so provides the symbol": on the
+  # L40/dual-Xeon dev machine this was diagnosed on, LLVM's libomp.so.5 was
+  # measured to be catastrophically slower than GNU's libgomp specifically
+  # for CPU-bound work executed while many sibling threads sit idle inside
+  # a large active OpenMP team (e.g. symla's multifrontal factorize()
+  # parallel driver) -- MA57's factor time dropped from 39-56s to 3-6s on
+  # k=1 after this fix. A minimal, solver-independent repro (57,741 small
+  # Eigen matrix ops, one thread busy inside a 128-thread team) measured
+  # 0.7s under libgomp vs. 16s under libomp.so.5, scaling worse with team
+  # size; not explained by allocator contention, and unaffected by
+  # OMP_WAIT_POLICY=PASSIVE or KMP_BLOCKTIME=0 -- looks like a genuine
+  # LLVM-libomp idle-thread-in-a-team pathology on that specific machine.
+  # Only observed/tested there; scoped narrowly here (Linux + GCC + NASOQ,
+  # the only combination that actually triggers the underlying link-order
+  # issue in this project's CI matrix) since forcing `-lgomp` unconditionally
+  # would break Clang/macOS/Windows builds where no such library exists.
+  #
+  # `--no-as-needed`/`--as-needed` bracket only `gomp` itself (not everything
+  # linked after it), so this doesn't change --as-needed pruning behavior
+  # for anything else in the link. Both runtimes still coexist in the
+  # process afterward -- this only changes which one wins the *shared*
+  # (GOMP_*/omp_*) symbol names; libiomp5/libomp.so.5 remains available
+  # (transitively, via libmkl_intel_thread.so's own DT_NEEDED) for MKL's own
+  # Intel-ABI (__kmpc_*) calls, which libgomp cannot satisfy.
+  target_link_libraries(${PROJECT_NAME} -Wl,--no-as-needed gomp -Wl,--as-needed)
+endif()
+
 # Correctness regression tests: run on a small synthetic grid mesh (not the
 # 720K-vertex dragon) and assert every compiled-in solver's L∞ residual
 # stays under tolerance, for each of k=1,2,3.
