@@ -1,4 +1,16 @@
 cmake_minimum_required(VERSION 3.1)
+
+if(APPLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libigl/external/eigen")
+  # AppleClang's driver searches /usr/local/include before any -isystem
+  # path, so a stray system-wide Eigen there would otherwise shadow
+  # libigl's bundled Eigen and break its unsupported/ headers. This must
+  # be set before project()/enable_language(), so it is picked up during
+  # compiler detection and recorded in CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES;
+  # CMake then skips re-adding this directory as -isystem when igl::core
+  # later requests it, leaving only this higher-precedence plain -I.
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I${CMAKE_CURRENT_SOURCE_DIR}/libigl/external/eigen")
+endif()
+
 project(sparse_solver_benchmark)
 
 option(IGL_WITH_CHOLMOD   "Use Cholmod" ON)
@@ -19,6 +31,15 @@ if(COMPILER_SUPPORTS_MARCH_NATIVE)
 endif()
 
 # openmp
+if(APPLE AND NOT OpenMP_C_FLAGS AND EXISTS "/opt/homebrew/opt/libomp")
+  # AppleClang ships no OpenMP runtime, and find_package(OpenMP) cannot
+  # locate Homebrew's keg-only libomp on its own, so point it there directly.
+  set(OpenMP_C_FLAGS "-Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include")
+  set(OpenMP_C_LIB_NAMES "omp")
+  set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include")
+  set(OpenMP_CXX_LIB_NAMES "omp")
+  set(OpenMP_omp_LIBRARY "/opt/homebrew/opt/libomp/lib/libomp.dylib")
+endif()
 find_package(OPENMP REQUIRED QUIET)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
