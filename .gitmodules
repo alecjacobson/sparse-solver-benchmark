@@ -38,6 +38,13 @@
 	# like a distinct bug in Accelerate's Bunch-Kaufman pivoting or
 	# supernodal blocking at scale, not investigated further here. OpenBLAS
 	# remains this project's NASOQ backend on Apple Silicon.
+	#
+	# Also includes the alecjacobson/configurable-ordering branch (merged on
+	# top of the CLAPACK/OpenBLAS fix above), which exposes NASOQ's
+	# fill-reducing ordering (METIS vs AMD) as a real CMake option --
+	# previously AMD was unreachable dead code. See
+	# https://github.com/sympiler/nasoq/pull/36; repoint back to
+	# https://github.com/sympiler/nasoq.git once both PRs merge.
 	url = https://github.com/alecjacobson/nasoq.git
 [submodule "ma57"]
 	path = ma57
