@@ -84,6 +84,15 @@ if(IGL_WITH_GPL)
     set(WITH_OPENMP  OFF CACHE BOOL "")
     set(WITH_DEMOS OFF CACHE BOOL "")
     set(BUILD_CXSPARSE OFF CACHE BOOL "")
+    # This SuiteSparse fork's CHOLMOD renamed the old WITH_PARTITION toggle to
+    # WITH_METIS (default ON), which this project's CMakeLists never updated
+    # to match, so METIS-based nested-dissection ordering was silently
+    # enabled. A/B timing on this machine (full dragon mesh, k=1..3) showed it
+    # makes no measurable difference for k=1,2 (within run-to-run noise) but a
+    # ~4x factorization slowdown for k=3 (1.1s vs 4.4s) -- CHOLMOD's default
+    # AMD-based ordering is a much better fit than METIS for the heavy fill-in
+    # the triharmonic system produces. Disable it.
+    set(WITH_METIS OFF CACHE BOOL "")
     if(IGL_WITH_MKL)
       # SuiteSparse's own find_package(BLAS) is independent of our FindMKL.cmake
       # above and could in principle pick a different MKL threading layer than
