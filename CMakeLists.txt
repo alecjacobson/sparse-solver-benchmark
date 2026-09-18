@@ -1,13 +1,17 @@
 cmake_minimum_required(VERSION 3.1)
 
-if(APPLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libigl/external/eigen")
+if(APPLE)
   # AppleClang's driver searches /usr/local/include before any -isystem
   # path, so a stray system-wide Eigen there would otherwise shadow
   # libigl's bundled Eigen and break its unsupported/ headers. This must
   # be set before project()/enable_language(), so it is picked up during
   # compiler detection and recorded in CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES;
   # CMake then skips re-adding this directory as -isystem when igl::core
-  # later requests it, leaving only this higher-precedence plain -I.
+  # later requests it, leaving only this higher-precedence plain -I. Not
+  # gated on the directory existing yet: libigl only clones it lazily,
+  # later, inside find_package(LIBIGL) below, so on a fresh checkout it
+  # isn't there yet at this point -- but it exists by the time anything
+  # actually gets compiled, and an extra nonexistent -I is harmless.
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I${CMAKE_CURRENT_SOURCE_DIR}/libigl/external/eigen")
 endif()
 
