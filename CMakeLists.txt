@@ -289,6 +289,12 @@ if(IGL_WITH_NASOQ AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/nasoq/CMakeLists.t
 endif()
 
 if(IGL_WITH_NASOQ)
+  set(NASOQ_BUILD_CLI OFF CACHE BOOL "")
+  set(NASOQ_BUILD_EXAMPLES OFF CACHE BOOL "")
+  set(NASOQ_BUILD_TESTS OFF CACHE BOOL "")
+  set(NASOQ_BUILD_DOCS OFF CACHE BOOL "")
+  set(NASOQ_WITH_EIGEN ON CACHE BOOL "")
+  set(NASOQ_WITH_MATLAB OFF CACHE BOOL "")
   if(IGL_WITH_MKL)
     # NASOQ's own cmake/FindMKL.cmake has the same missing-header-search-hint
     # bug our original cmake/FindMKL.cmake had (FIND_PATH with no HINTS, so
@@ -296,18 +302,40 @@ if(IGL_WITH_NASOQ)
     # find_path is a no-op instead of failing.
     set(MKL_INCLUDE_DIR /usr/include/mkl CACHE PATH "")
     set(NASOQ_BLAS_BACKEND MKL CACHE STRING "")
-    set(NASOQ_BUILD_CLI OFF CACHE BOOL "")
-    set(NASOQ_BUILD_EXAMPLES OFF CACHE BOOL "")
-    set(NASOQ_BUILD_TESTS OFF CACHE BOOL "")
-    set(NASOQ_BUILD_DOCS OFF CACHE BOOL "")
-    set(NASOQ_WITH_EIGEN ON CACHE BOOL "")
-    set(NASOQ_WITH_MATLAB OFF CACHE BOOL "")
     set(NASOQ_USE_CLAPACK OFF CACHE BOOL "")
+  else()
+    # No MKL (e.g. Apple Silicon): fall back to OpenBLAS, which NASOQ's own
+    # CMakeLists already supports as an alternative NASOQ_BLAS_BACKEND.
+    # (Apple Accelerate would be preferred here once it's verified correct
+    # -- see https://github.com/sympiler/nasoq/pull/27, which is unmerged
+    # and self-reported nondeterministic; not wired in here yet.)
+    # find_package(BLAS BLA_VENDOR OpenBLAS) (invoked inside NASOQ's own
+    # cmake/third_party/openblas.cmake) can't see Homebrew's keg-only
+    # openblas without this hint on its search path.
+    find_path(NASOQ_OPENBLAS_PREFIX include/openblas_config.h
+      HINTS /opt/homebrew/opt/openblas /usr/local/opt/openblas)
+    if(NASOQ_OPENBLAS_PREFIX)
+      list(APPEND CMAKE_PREFIX_PATH ${NASOQ_OPENBLAS_PREFIX})
+      set(NASOQ_BLAS_BACKEND OpenBLAS CACHE STRING "")
+      # NASOQ_USE_CLAPACK=ON avoids OpenBLAS's own LAPACKE, which requires a
+      # Fortran compiler to build from source. This vendors netlib CLAPACK
+      # (f2c-translated reference LAPACK) for a handful of routines
+      # (DSYTRF/DLAPMT) while linking everything else against OpenBLAS.
+      # NASOQ's cmake/third_party/clapack.cmake patches CLAPACK's fetched
+      # f2c.h so its `integer`/`logical` typedefs are 4 bytes (matching
+      # OpenBLAS's standard LP64 Fortran INTEGER width) instead of f2c.h's
+      # historical 8-byte `long int` default, which otherwise corrupts
+      # every CLAPACK-to-OpenBLAS call on 64-bit platforms.
+      set(NASOQ_USE_CLAPACK ON CACHE BOOL "")
+    endif()
+  endif()
+  if(IGL_WITH_MKL OR NASOQ_OPENBLAS_PREFIX)
     add_subdirectory(nasoq)
     target_compile_definitions(${PROJECT_NAME} PUBLIC -DIGL_WITH_NASOQ)
     target_link_libraries(${PROJECT_NAME} nasoq::eigen_interface)
   else()
-    message(WARNING "NASOQ LBL requires IGL_WITH_MKL for its BLAS backend; disabling.")
+    message(WARNING "NASOQ LBL requires either IGL_WITH_MKL or a discoverable "
+      "OpenBLAS (e.g. `brew install openblas` on macOS) for its BLAS backend; disabling.")
     set(IGL_WITH_NASOQ OFF)
   endif()
 endif()
