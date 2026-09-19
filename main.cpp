@@ -898,17 +898,20 @@ void solve_symla(
 // macOS 10.13+): ships in the OS on every Mac, no extra dependency to
 // vendor, unlike CHOLMOD (SuiteSparse submodule) or MKL (external install).
 // Its C API doesn't share Eigen's factor.info()/compute() interface, so --
-// like MA57/catamari above -- it gets its own standalone function. Only
-// Cholesky is exercised (this benchmark's flattened k=1..3 systems are
-// SPD); the mixed/indefinite k=4,5 systems are expected to fail
-// factorization, same as every other SPD-only solver here
-// (CholmodSupernodalLLT, SimplicialLLT).
+// like MA57/catamari above -- it gets its own standalone function. `type`
+// selects the factorization: SparseFactorizationCholesky for the flattened
+// k=1..3 SPD systems, SparseFactorizationLDLT (Accelerate's default LDL^T,
+// currently threshold partial pivoting -- "provably numerically stable",
+// per Solve.h's own header comment) for the mixed/indefinite k=4,5 systems,
+// mirroring every other solver here that offers a dedicated LDLT-style path
+// for those (catamari, MA57).
 void solve_accelerate_sparse(
   const std::string & name,
   int k,
   const Eigen::SparseMatrix<double> & Q,
   const Eigen::MatrixXd & rhs,
-  Eigen::MatrixXd & U)
+  Eigen::MatrixXd & U,
+  SparseFactorization_t type)
 {
   if(!should_run(name)) return;
 
@@ -942,7 +945,7 @@ void solve_accelerate_sparse(
   SparseMatrix_Double A = SparseConvertFromCoordinate(
     (int)QL.rows(), (int)QL.cols(), nnz, /*blockSize=*/1, attributes,
     rows.data(), cols.data(), vals.data());
-  SparseOpaqueFactorization_Double factor = SparseFactor(SparseFactorizationCholesky, A);
+  SparseOpaqueFactorization_Double factor = SparseFactor(type, A);
   const double t_factor = timer.toc();
   if(factor.status != SparseStatusOK)
   {
@@ -1522,7 +1525,25 @@ int main(int argc, char * argv[])
     }
 #endif
 #ifdef IGL_WITH_ACCELERATE_SPARSE
-    solve_accelerate_sparse("Accelerate SparseCholesky",k,Q,rhs,U);
+    if(!is_mixed)
+    {
+      solve_accelerate_sparse("Accelerate SparseCholesky",k,Q,rhs,U,SparseFactorizationCholesky);
+    }
+    else
+    {
+      // SparseFactorizationLDLT (Accelerate's default, currently threshold
+      // partial pivoting) rather than hardcoding a specific pivoting
+      // strategy: A/B'd LDLTTPP vs. LDLTSBK on both mixed systems here and
+      // neither consistently won (TPP more accurate on Mixed Biharmonic,
+      // SBK more accurate on Mixed Triharmonic, both always well within
+      // this benchmark's accuracy threshold either way) -- and Solve.h's
+      // own header comment describes SBK as "not numerically stable for
+      // some systems", a real risk given these mixed systems' structurally
+      // -zero λ-block diagonal (the same property that broke NASOQ's
+      // ordering-sensitive crash elsewhere in this file). Deferring to
+      // Accelerate's own recommended default is the safer call.
+      solve_accelerate_sparse("Accelerate SparseLDLT",k,Q,rhs,U,SparseFactorizationLDLT);
+    }
 #endif
     solve<Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> >("Eigen::SimplicialLLT",k,Q,rhs,U);
     if(k == 5)

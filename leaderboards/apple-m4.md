@@ -69,15 +69,15 @@ Regenerate with:
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |                        NASOQ LBL |      1.2 secs |     0.19 secs |     8.34662e-09 |
-| 🥈 2 |            Eigen::SimplicialLDLT |      5.7 secs |     0.28 secs |      1.2478e-07 |
-| 🥉 3 |                 Eigen::UmfPackLU |      5.1 secs |      1.2 secs |     3.87298e-16 |
-|    4 |     catamari::SparseLDL (LDLᵀ) |      7.1 secs |     0.19 secs |     4.69765e-08 |
-|    5 |                  Eigen::SparseLU |       13 secs |     0.31 secs |     3.26471e-14 |
-|    6 |             MA57 (symla, LDLᵀ) |       15 secs |     0.16 secs |     3.07002e-08 |
+| 🥇 1 |            Accelerate SparseLDLT |     0.98 secs |     0.17 secs |     1.60408e-10 |
+| 🥈 2 |                        NASOQ LBL |      1.2 secs |     0.19 secs |     8.34662e-09 |
+| 🥉 3 |            Eigen::SimplicialLDLT |      5.7 secs |     0.28 secs |      1.2478e-07 |
+|    4 |                 Eigen::UmfPackLU |      5.1 secs |      1.2 secs |     3.87298e-16 |
+|    5 |     catamari::SparseLDL (LDLᵀ) |      7.1 secs |     0.19 secs |     4.69765e-08 |
+|    6 |                  Eigen::SparseLU |       13 secs |     0.31 secs |     3.26471e-14 |
+|    7 |             MA57 (symla, LDLᵀ) |       15 secs |     0.16 secs |     3.07002e-08 |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
-|    - |        Accelerate SparseCholesky |           - |           - | skipped: factorization failed: status -1 |
 |    - |  `Eigen::CG<IncompleteCholesky>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - | `Eigen::BiCGSTAB<IncompleteLUT>` |           - |           - | skipped: did not actually succeed: backward error 0.2572 exceeds 1e-06 |
 
@@ -85,28 +85,45 @@ Regenerate with:
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |                        NASOQ LBL |      2.8 secs |     0.37 secs |     5.70661e-11 |
-| 🥈 2 |     catamari::SparseLDL (LDLᵀ) |       26 secs |     0.52 secs |     1.55308e-09 |
-| 🥉 3 |             MA57 (symla, LDLᵀ) |       41 secs |     0.33 secs |     1.93908e-10 |
-|    4 |                  Eigen::SparseLU |       50 secs |      1.4 secs |     3.47129e-12 |
+| 🥇 1 |            Accelerate SparseLDLT |      2.5 secs |     0.31 secs |     4.51041e-10 |
+| 🥈 2 |                        NASOQ LBL |      2.8 secs |     0.37 secs |     5.70661e-11 |
+| 🥉 3 |     catamari::SparseLDL (LDLᵀ) |       26 secs |     0.52 secs |     1.55308e-09 |
+|    4 |             MA57 (symla, LDLᵀ) |       41 secs |     0.33 secs |     1.93908e-10 |
+|    5 |                  Eigen::SparseLU |       50 secs |      1.4 secs |     3.47129e-12 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: known crash risk: excessive MKL thread churn on this system's fill-in |
 |    - |            Eigen::SimplicialLDLT |           - |           - | skipped: known crash: SIGSEGV in Eigen's unpivoted LDLT at this scale |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
-|    - |        Accelerate SparseCholesky |           - |           - | skipped: factorization failed: status -1 |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |  `Eigen::CG<IncompleteCholesky>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 |    - | `Eigen::BiCGSTAB<IncompleteLUT>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
 
 > [!NOTE]
-> **`Accelerate SparseCholesky`** (Apple's Accelerate Sparse Solvers library,
-> `IGL_WITH_ACCELERATE_SPARSE`, macOS-only) is new on this report card. It
-> ships in the OS on every Mac -- no submodule (unlike CHOLMOD's SuiteSparse)
-> or external install (unlike MKL) required -- and takes 🥇 first place on
+> **Apple's Accelerate Sparse Solvers library** (`IGL_WITH_ACCELERATE_SPARSE`,
+> macOS-only) is new on this report card. It ships in the OS on every Mac --
+> no submodule (unlike CHOLMOD's SuiteSparse) or external install (unlike
+> MKL) required -- and `Accelerate SparseCholesky` takes 🥇 first place on
 > all three SPD systems here, edging out `Eigen::CholmodSupernodalLLT` by a
-> small margin on factor time while matching its accuracy. Like every other
-> SPD-only solver here, it correctly fails/skips on the indefinite mixed
-> k=4,5 systems (Accelerate has no exposed LDLT/indefinite factorization in
-> this API).
+> small margin on factor time while matching its accuracy.
+>
+> It does handle the indefinite mixed k=4,5 systems too, contrary to an
+> earlier version of this note claiming otherwise: Accelerate exposes a
+> `SparseFactorizationLDLT` factorization (`SAS = PLDL'P'`, symmetric
+> indefinite, not just SPD `SparseFactorizationCholesky`), and
+> `Accelerate SparseLDLT` now takes 🥇 first on both Mixed Biharmonic and
+> Mixed Triharmonic too, edging out `NASOQ LBL`. Accelerate offers three
+> pivoting strategies for this (`LDLTUnpivoted`, `LDLTSBK`, `LDLTTPP`) plus
+> a generic `LDLT` that aliases whichever Apple currently recommends
+> (presently TPP -- threshold partial pivoting, "provably numerically
+> stable" per Accelerate's own header); A/B'd `LDLTTPP` vs. `LDLTSBK`
+> explicitly on both mixed systems here and neither consistently won (TPP
+> more accurate on Mixed Biharmonic, SBK more accurate on Mixed
+> Triharmonic, both always comfortably within this benchmark's accuracy
+> threshold either way) -- deferred to the generic `LDLT` alias rather than
+> picking a side, especially given Accelerate's own header explicitly
+> warns SBK is "not numerically stable for some systems", a real risk
+> given these mixed systems' structurally-zero λ-block diagonal (the same
+> property behind NASOQ's ordering-sensitive crash noted elsewhere in this
+> file).
 
 > [!NOTE]
 > **This machine's `SuiteSparse` build previously had CHOLMOD's METIS-based
