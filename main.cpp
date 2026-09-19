@@ -1531,18 +1531,21 @@ int main(int argc, char * argv[])
     }
     else
     {
-      // SparseFactorizationLDLT (Accelerate's default, currently threshold
-      // partial pivoting) rather than hardcoding a specific pivoting
-      // strategy: A/B'd LDLTTPP vs. LDLTSBK on both mixed systems here and
-      // neither consistently won (TPP more accurate on Mixed Biharmonic,
-      // SBK more accurate on Mixed Triharmonic, both always well within
-      // this benchmark's accuracy threshold either way) -- and Solve.h's
-      // own header comment describes SBK as "not numerically stable for
-      // some systems", a real risk given these mixed systems' structurally
-      // -zero λ-block diagonal (the same property that broke NASOQ's
-      // ordering-sensitive crash elsewhere in this file). Deferring to
-      // Accelerate's own recommended default is the safer call.
-      solve_accelerate_sparse("Accelerate SparseLDLT",k,Q,rhs,U,SparseFactorizationLDLT);
+      // Explicitly SparseFactorizationLDLTTPP (threshold partial pivoting),
+      // not the generic SparseFactorizationLDLT alias -- Solve.h documents
+      // that alias as "currently" resolving to TPP, but a future Accelerate
+      // version could silently repoint it at a different strategy without
+      // this benchmark noticing. Pin the actual variant so the leaderboard
+      // name always matches what really ran. A/B'd LDLTTPP vs. LDLTSBK on
+      // both mixed systems here and neither consistently won on accuracy
+      // (TPP more accurate on Mixed Biharmonic, SBK more accurate on Mixed
+      // Triharmonic, both always well within this benchmark's accuracy
+      // threshold either way) -- but Solve.h's own header comment describes
+      // SBK as "not numerically stable for some systems", a real risk given
+      // these mixed systems' structurally-zero λ-block diagonal (the same
+      // property that broke NASOQ's ordering-sensitive crash elsewhere in
+      // this file), so TPP -- provably stable -- is the safer pin.
+      solve_accelerate_sparse("Accelerate SparseLDLT (TPP)",k,Q,rhs,U,SparseFactorizationLDLTTPP);
     }
 #endif
     solve<Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> >("Eigen::SimplicialLLT",k,Q,rhs,U);

@@ -69,7 +69,7 @@ Regenerate with:
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |            Accelerate SparseLDLT |     0.98 secs |     0.17 secs |     1.60408e-10 |
+| 🥇 1 |            Accelerate SparseLDLT (TPP) |     0.98 secs |     0.17 secs |     1.60408e-10 |
 | 🥈 2 |                        NASOQ LBL |      1.2 secs |     0.19 secs |     8.34662e-09 |
 | 🥉 3 |            Eigen::SimplicialLDLT |      5.7 secs |     0.28 secs |      1.2478e-07 |
 |    4 |                 Eigen::UmfPackLU |      5.1 secs |      1.2 secs |     3.87298e-16 |
@@ -85,7 +85,7 @@ Regenerate with:
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |            Accelerate SparseLDLT |      2.5 secs |     0.31 secs |     4.51041e-10 |
+| 🥇 1 |            Accelerate SparseLDLT (TPP) |      2.5 secs |     0.31 secs |     4.51041e-10 |
 | 🥈 2 |                        NASOQ LBL |      2.8 secs |     0.37 secs |     5.70661e-11 |
 | 🥉 3 |     catamari::SparseLDL (LDLᵀ) |       26 secs |     0.52 secs |     1.55308e-09 |
 |    4 |             MA57 (symla, LDLᵀ) |       41 secs |     0.33 secs |     1.93908e-10 |
@@ -107,23 +107,25 @@ Regenerate with:
 >
 > It does handle the indefinite mixed k=4,5 systems too, contrary to an
 > earlier version of this note claiming otherwise: Accelerate exposes a
-> `SparseFactorizationLDLT` factorization (`SAS = PLDL'P'`, symmetric
-> indefinite, not just SPD `SparseFactorizationCholesky`), and
-> `Accelerate SparseLDLT` now takes 🥇 first on both Mixed Biharmonic and
-> Mixed Triharmonic too, edging out `NASOQ LBL`. Accelerate offers three
-> pivoting strategies for this (`LDLTUnpivoted`, `LDLTSBK`, `LDLTTPP`) plus
-> a generic `LDLT` that aliases whichever Apple currently recommends
-> (presently TPP -- threshold partial pivoting, "provably numerically
-> stable" per Accelerate's own header); A/B'd `LDLTTPP` vs. `LDLTSBK`
-> explicitly on both mixed systems here and neither consistently won (TPP
-> more accurate on Mixed Biharmonic, SBK more accurate on Mixed
-> Triharmonic, both always comfortably within this benchmark's accuracy
-> threshold either way) -- deferred to the generic `LDLT` alias rather than
-> picking a side, especially given Accelerate's own header explicitly
-> warns SBK is "not numerically stable for some systems", a real risk
-> given these mixed systems' structurally-zero λ-block diagonal (the same
-> property behind NASOQ's ordering-sensitive crash noted elsewhere in this
-> file).
+> `SparseFactorizationLDLT` family of factorizations (`SAS = PLDL'P'`,
+> symmetric indefinite, not just SPD `SparseFactorizationCholesky`), with
+> three named pivoting strategies (`LDLTUnpivoted`, `LDLTSBK`, `LDLTTPP`)
+> plus a generic `LDLT` alias that just points at whichever Apple currently
+> recommends. `Accelerate SparseLDLT (TPP)` now takes 🥇 first on both
+> Mixed Biharmonic and Mixed Triharmonic too, edging out `NASOQ LBL`. The
+> table names the specific variant actually called
+> (`SparseFactorizationLDLTTPP`, threshold partial pivoting, "provably
+> numerically stable" per Accelerate's own header) rather than the generic
+> `LDLT` alias, so what's shown always matches what really ran even if a
+> future Accelerate version repoints that alias elsewhere. A/B'd `LDLTTPP`
+> vs. `LDLTSBK` explicitly on both mixed systems here and neither
+> consistently won on accuracy (TPP more accurate on Mixed Biharmonic, SBK
+> more accurate on Mixed Triharmonic, both always comfortably within this
+> benchmark's accuracy threshold either way) -- picked TPP over SBK given
+> Accelerate's own header explicitly warns SBK is "not numerically stable
+> for some systems", a real risk given these mixed systems'
+> structurally-zero λ-block diagonal (the same property behind NASOQ's
+> ordering-sensitive crash noted elsewhere in this file).
 
 > [!NOTE]
 > **This machine's `SuiteSparse` build previously had CHOLMOD's METIS-based
