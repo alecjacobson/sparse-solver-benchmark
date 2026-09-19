@@ -295,6 +295,16 @@ if(IGL_WITH_NASOQ)
   set(NASOQ_BUILD_DOCS OFF CACHE BOOL "")
   set(NASOQ_WITH_EIGEN ON CACHE BOOL "")
   set(NASOQ_WITH_MATLAB OFF CACHE BOOL "")
+  # NASOQ's fill-reducing ordering used to be hardcoded to METIS (see
+  # https://github.com/sympiler/nasoq/pull/36, which exposes NASOQ_ORDERING
+  # as a real CMake option instead). A/B timing
+  # on this machine (full dragon mesh) showed AMD is consistently ~3-4x
+  # faster than METIS here, at matching accuracy, across every system this
+  # solver runs on (Harmonic 0.35s vs 1.4s, Biharmonic 0.84s vs 2.7s,
+  # Triharmonic 1.7s vs 4.7s, Mixed Biharmonic 1.2s vs 3.6s factor time) --
+  # the same lesson as CHOLMOD's own METIS-ordering regression elsewhere in
+  # this file. Prefer AMD.
+  set(NASOQ_ORDERING AMD CACHE STRING "")
   if(IGL_WITH_MKL)
     # NASOQ's own cmake/FindMKL.cmake has the same missing-header-search-hint
     # bug our original cmake/FindMKL.cmake had (FIND_PATH with no HINTS, so

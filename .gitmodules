@@ -21,6 +21,30 @@
 	# (used on Apple Silicon, where there's no Intel MKL) return NaN on
 	# every solve. See https://github.com/sympiler/nasoq/pull/34; repoint
 	# back to https://github.com/sympiler/nasoq.git once that merges.
+	#
+	# NOTE: a separate attempt to switch this project to
+	# NASOQ_BLAS_BACKEND=Accelerate (see
+	# https://github.com/sympiler/nasoq/pull/35, which fixes a real,
+	# root-caused bug -- a void-vs-int LAPACK return-value mismatch in
+	# `nasoq::clapacke::LAPACKE_dlapmt` -- behind the nondeterminism
+	# originally reported in the unmerged
+	# https://github.com/sympiler/nasoq/pull/27) was evaluated and NOT
+	# adopted here: even with that fix, NASOQ LBL via Accelerate showed a
+	# separate, still-unresolved scale-dependent problem on the indefinite
+	# "Mixed Biharmonic"/"Mixed Triharmonic" systems -- backward error grew
+	# with problem size (~1.4e-6 at a 400x400 grid, ~1.4e-5 at 800x800) and
+	# the full xyzrgb_dragon-720K.ply Mixed Biharmonic case hung for over
+	# 15 minutes (vs. 3.7s with OpenBLAS) instead of completing. This looks
+	# like a distinct bug in Accelerate's Bunch-Kaufman pivoting or
+	# supernodal blocking at scale, not investigated further here. OpenBLAS
+	# remains this project's NASOQ backend on Apple Silicon.
+	#
+	# Also includes the alecjacobson/configurable-ordering branch (merged on
+	# top of the CLAPACK/OpenBLAS fix above), which exposes NASOQ's
+	# fill-reducing ordering (METIS vs AMD) as a real CMake option --
+	# previously AMD was unreachable dead code. See
+	# https://github.com/sympiler/nasoq/pull/36; repoint back to
+	# https://github.com/sympiler/nasoq.git once both PRs merge.
 	url = https://github.com/alecjacobson/nasoq.git
 [submodule "ma57"]
 	path = ma57

@@ -23,12 +23,12 @@ Regenerate with:
 |-----:|--------------------------------:|------------:|------------:|----------------:|
 | 🥇 1 |        Accelerate SparseCholesky |     0.27 secs |    0.038 secs |     1.18122e-15 |
 | 🥈 2 |      Eigen::CholmodSupernodalLLT |      0.3 secs |    0.032 secs |     1.52008e-15 |
-| 🥉 3 |            Eigen::SimplicialLDLT |      0.6 secs |    0.054 secs |     2.33654e-15 |
-|    4 |             Eigen::SimplicialLLT |     0.68 secs |    0.054 secs |     3.01865e-15 |
-|    5 |              catamari::SparseLDL |     0.78 secs |    0.042 secs |     1.35589e-15 |
-|    6 |                 Eigen::UmfPackLU |     0.71 secs |      0.2 secs |     2.71385e-16 |
-|    7 | `Eigen::BiCGSTAB<IncompleteLUT>` |     0.85 secs |     0.59 secs |     3.91637e-16 |
-|    8 |                        NASOQ LBL |      1.4 secs |    0.058 secs |      1.1256e-15 |
+| 🥉 3 |                        NASOQ LBL |     0.35 secs |    0.061 secs |     7.96362e-16 |
+|    4 |            Eigen::SimplicialLDLT |      0.6 secs |    0.054 secs |     2.33654e-15 |
+|    5 |             Eigen::SimplicialLLT |     0.68 secs |    0.054 secs |     3.01865e-15 |
+|    6 |              catamari::SparseLDL |     0.78 secs |    0.042 secs |     1.35589e-15 |
+|    7 |                 Eigen::UmfPackLU |     0.71 secs |      0.2 secs |     2.71385e-16 |
+|    8 | `Eigen::BiCGSTAB<IncompleteLUT>` |     0.85 secs |     0.59 secs |     3.91637e-16 |
 |    9 |                  Eigen::SparseLU |      2.3 secs |    0.084 secs |     2.38898e-15 |
 |   10 |                     MA57 (symla) |      2.8 secs |    0.064 secs |      1.0304e-15 |
 |   11 |  `Eigen::CG<IncompleteCholesky>` |     0.27 secs |      9.9 secs |      4.0063e-09 |
@@ -39,7 +39,7 @@ Regenerate with:
 |-----:|--------------------------------:|------------:|------------:|----------------:|
 | 🥇 1 |        Accelerate SparseCholesky |     0.59 secs |    0.082 secs |     1.34589e-14 |
 | 🥈 2 |      Eigen::CholmodSupernodalLLT |     0.63 secs |    0.074 secs |     4.91755e-15 |
-| 🥉 3 |                        NASOQ LBL |      2.7 secs |     0.13 secs |     5.35363e-15 |
+| 🥉 3 |                        NASOQ LBL |     0.84 secs |     0.12 secs |     3.75248e-15 |
 |    4 |                 Eigen::UmfPackLU |      2.3 secs |     0.74 secs |     5.27979e-16 |
 |    5 |            Eigen::SimplicialLDLT |      4.7 secs |      0.2 secs |      7.8414e-15 |
 |    6 |             Eigen::SimplicialLLT |      4.7 secs |      0.2 secs |     4.61287e-15 |
@@ -55,7 +55,7 @@ Regenerate with:
 |-----:|--------------------------------:|------------:|------------:|----------------:|
 | 🥇 1 |      Eigen::CholmodSupernodalLLT |      1.3 secs |     0.14 secs |     2.38957e-13 |
 | 🥈 2 |        Accelerate SparseCholesky |      1.6 secs |     0.22 secs |     5.66792e-13 |
-| 🥉 3 |                        NASOQ LBL |      4.7 secs |     0.18 secs |     6.43583e-14 |
+| 🥉 3 |                        NASOQ LBL |      1.7 secs |     0.21 secs |     5.98064e-14 |
 |    4 |             Eigen::SimplicialLLT |       26 secs |     0.68 secs |     5.90259e-13 |
 |    5 |            Eigen::SimplicialLDLT |       26 secs |     0.74 secs |     3.99303e-13 |
 |    6 |              catamari::SparseLDL |       35 secs |     0.41 secs |     9.05897e-13 |
@@ -69,7 +69,7 @@ Regenerate with:
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |                        NASOQ LBL |      3.7 secs |     0.16 secs |     8.97264e-08 |
+| 🥇 1 |                        NASOQ LBL |      1.2 secs |     0.19 secs |     8.34662e-09 |
 | 🥈 2 |            Eigen::SimplicialLDLT |      5.7 secs |     0.28 secs |      1.2478e-07 |
 | 🥉 3 |                 Eigen::UmfPackLU |      5.1 secs |      1.2 secs |     3.87298e-16 |
 |    4 |     catamari::SparseLDL (LDLᵀ) |      7.1 secs |     0.19 secs |     4.69765e-08 |
@@ -85,12 +85,12 @@ Regenerate with:
 
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
-| 🥇 1 |     catamari::SparseLDL (LDLᵀ) |       26 secs |     0.52 secs |     1.55308e-09 |
-| 🥈 2 |                  Eigen::SparseLU |       50 secs |      1.4 secs |     3.47129e-12 |
-| 🥉 3 |             MA57 (symla, LDLᵀ) |    1e+02 secs |     0.46 secs |     2.65418e-10 |
+| 🥇 1 |                        NASOQ LBL |      2.8 secs |     0.37 secs |     5.70661e-11 |
+| 🥈 2 |     catamari::SparseLDL (LDLᵀ) |       26 secs |     0.52 secs |     1.55308e-09 |
+| 🥉 3 |                  Eigen::SparseLU |       50 secs |      1.4 secs |     3.47129e-12 |
+|    4 |             MA57 (symla, LDLᵀ) |    1e+02 secs |     0.46 secs |     2.65418e-10 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: known crash risk: excessive MKL thread churn on this system's fill-in |
 |    - |            Eigen::SimplicialLDLT |           - |           - | skipped: known crash: SIGSEGV in Eigen's unpivoted LDLT at this scale |
-|    - |                        NASOQ LBL |           - |           - | skipped: known crash: SIGSEGV in libmetis genmmd/mmdelm via NASOQ's symbolic_analysis_lin_solve on this system's sparsity pattern |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |        Accelerate SparseCholesky |           - |           - | skipped: factorization failed: status -1 |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
@@ -142,10 +142,57 @@ Regenerate with:
 > unconditionally-available serial variant (`ldl_variant = 2`), which is
 > also the right choice given this file already forces `num_thread = 1`.
 > With both fixes, NASOQ LBL lands respectably (top 3 on Harmonic/
-> Biharmonic/Triharmonic, and 🥇 first on Mixed Biharmonic). It's still
-> unavailable on Mixed Triharmonic, where it crashes with a SIGSEGV inside
-> `libmetis` during symbolic analysis on this system's sparsity pattern --
-> unrelated to the two fixes above and not investigated further here.
+> Biharmonic/Triharmonic, 🥇 first on both Mixed Biharmonic and, as of the
+> `AMD`-ordering switch below, Mixed Triharmonic too).
+
+> [!NOTE]
+> **`NASOQ LBL`'s numbers above use `AMD` ordering, not NASOQ's previous
+> (and still default) `METIS` ordering.** NASOQ's own `symbolic_phase.cpp`
+> already had a complete, working AMD-ordering code path sitting right next
+> to the METIS one, but it was permanently unreachable dead code -- `METIS`
+> was unconditionally `#define`'d in a core header with no way to disable
+> it. Exposed as a real `NASOQ_ORDERING` CMake option in
+> [sympiler/nasoq#36](https://github.com/sympiler/nasoq/pull/36). A/B timing
+> on this machine showed AMD is consistently **~3-4x faster than METIS** at
+> matching accuracy on every system here: Harmonic 0.35s vs. 1.4s,
+> Biharmonic 0.84s vs. 2.7s, Triharmonic 1.7s vs. 4.7s, Mixed Biharmonic
+> 1.2s vs. 3.7s (factor time) -- the same lesson as this report's earlier
+> CHOLMOD/METIS note above. This project's `CMakeLists.txt` now sets
+> `NASOQ_ORDERING AMD` explicitly for its own NASOQ integration.
+>
+> Bonus effect: switching to AMD ordering also made Mixed Triharmonic
+> stop crashing. That system used to reliably SIGSEGV inside libmetis's
+> minimum-degree ordering (`genmmd`/`mmdelm`), root-caused (see
+> [sympiler/nasoq#33](https://github.com/sympiler/nasoq/issues/33)) to an
+> out-of-bounds heap write in NASOQ's own `find_perturbation()`/
+> `apply_perturbation()`, inherent to this system's structurally-zero
+> λ-block diagonal. **That OOB write is still unfixed upstream and still
+> happens under AMD ordering too** -- it just doesn't corrupt anything
+> AMD's ordering routine reads, unlike METIS's, so no crash is currently
+> observed (verified: 20/20 repeated small-grid runs plus the full dragon
+> mesh, all clean with correct results, ~5.7e-11 backward error). This is
+> closer to "lucky" than "fixed": if `NASOQ_ORDERING` is ever switched back
+> to `METIS`, or NASOQ's own allocator/heap layout changes, this crash risk
+> returns. See `main.cpp`'s `IGL_WITH_NASOQ` block for the same caveat
+> in-code.
+
+> [!NOTE]
+> **A separate attempt to switch NASOQ's BLAS backend from OpenBLAS to
+> Apple's Accelerate framework was evaluated and not adopted.** The
+> nondeterminism originally reported in the unmerged
+> [sympiler/nasoq#27](https://github.com/sympiler/nasoq/pull/27) was
+> root-caused (a `void`-vs-`int` LAPACK return-value mismatch in
+> `nasoq::clapacke::LAPACKE_dlapmt`, garbage-reading a nonexistent return
+> value from Accelerate's `dlapmt_`) and fixed in
+> [sympiler/nasoq#35](https://github.com/sympiler/nasoq/pull/35), verified
+> deterministic across 20 repeated test runs plus ASan/UBSan-clean stress
+> tests. But at the scale this benchmark actually runs at, a second,
+> distinct, unresolved problem showed up on the indefinite systems:
+> backward error grew with problem size, and the full-mesh Mixed Biharmonic
+> case hung for 15+ minutes instead of OpenBLAS's 3.7s. Likely a separate
+> bug in Accelerate's Bunch-Kaufman pivoting or supernodal blocking at
+> scale, not investigated further -- OpenBLAS remains this project's NASOQ
+> backend on Apple Silicon.
 > Apple Accelerate support for NASOQ's BLAS backend
 > (https://github.com/sympiler/nasoq/pull/27) remains unmerged and was not
 > pursued in this pass; OpenBLAS was sufficient to get correct results.
