@@ -31,9 +31,9 @@ same as the C++ side's own ranking logic.
 |    9 | `Eigen::BiCGSTAB<IncompleteLUT>` |    1.6 secs |    1.4 secs |     4.16213e-16 |
 |   10 |                Eigen::PardisoLLT |    3.1 secs |    1.1 secs |     2.91357e-16 |
 |   11 |               Eigen::PardisoLDLT |    3.3 secs |    1.2 secs |     3.07192e-16 |
-|   12 |                     MA57 (symla) |    4.6 secs |   0.19 secs |     9.28829e-16 |
-|   13 |                      warp::gmres | 0.00032 secs |    5.1 secs |     5.99556e-16 |
-|   14 |                  Eigen::SparseLU |    5.2 secs |   0.18 secs |     3.97062e-15 |
+|   12 |                      warp::gmres | 0.00032 secs |    5.1 secs |     5.99556e-16 |
+|   13 |                  Eigen::SparseLU |    5.2 secs |   0.18 secs |     3.97062e-15 |
+|   14 |                     MA57 (symla) |    5.3 secs |   0.15 secs |      9.9376e-16 |
 |   15 | Eigen::CholmodSupernodalLLT (CUDA) |    6.5 secs |   0.83 secs |     8.32449e-16 |
 |   16 |      Eigen::CholmodSupernodalLLT |    7.1 secs |   0.62 secs |     8.32449e-16 |
 |   17 |        NVIDIA cuSOLVER (Sp Chol) |      (fused)* |    9.3 secs |     1.10125e-15 |
@@ -58,7 +58,7 @@ same as the C++ side's own ranking logic.
 |   10 |              catamari::SparseLDL |     11 secs |   0.36 secs |     7.11499e-15 |
 |   11 | `Eigen::BiCGSTAB<IncompleteLUT>` |     11 secs |    4.8 secs |     5.71533e-16 |
 |   12 |        NVIDIA cuSOLVER (Sp Chol) |      (fused)* |     20 secs |     6.30463e-15 |
-|   13 |                     MA57 (symla) |     22 secs |    0.6 secs |     3.05891e-15 |
+|   13 |                     MA57 (symla) |     19 secs |    1.5 secs |     3.29539e-15 |
 |   14 |                  Eigen::SparseLU |     36 secs |   0.85 secs |     5.55392e-12 |
 |   15 |                         warp::cr | 0.00033 secs |     85 secs |     5.73228e-08 |
 |    - |                         warp::cg |           - |           - | skipped: did not actually succeed: backward error 0.0001483 exceeds 1e-06 |
@@ -82,7 +82,7 @@ same as the C++ side's own ranking logic.
 |    8 |            Eigen::SimplicialLDLT |     35 secs |   0.97 secs |     1.41199e-13 |
 |    9 |              catamari::SparseLDL |     45 secs |   0.84 secs |     1.90941e-13 |
 |   10 |        NVIDIA cuSOLVER (Sp Chol) |      (fused)* |     49 secs |     6.21089e-13 |
-|   11 |                     MA57 (symla) |  1e+02 secs |   0.78 secs |      4.8854e-14 |
+|   11 |                     MA57 (symla) |     63 secs |    3.5 secs |     8.46134e-14 |
 |   12 |                  Eigen::SparseLU | 1.5e+02 secs |    1.7 secs |     7.41722e-09 |
 |   13 |                         warp::cr | 0.00024 secs | 7.5e+02 secs |     1.84984e-08 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
@@ -104,7 +104,7 @@ same as the C++ side's own ranking logic.
 |    4 |            Eigen::SimplicialLDLT |    9.2 secs |   0.46 secs |     1.09396e-07 |
 |    5 |       catamari::SparseLDL (LDLᵀ) |     12 secs |   0.41 secs |     1.41253e-07 |
 |    6 |                 Eigen::UmfPackLU |     11 secs |    2.3 secs |     3.91761e-16 |
-|    7 |               MA57 (symla, LDLᵀ) |     24 secs |   0.89 secs |     5.12888e-08 |
+|    7 |               MA57 (symla, LDLᵀ) |     19 secs |    2.2 secs |     4.67094e-08 |
 |    8 |                  Eigen::SparseLU |     30 secs |   0.62 secs |     2.92105e-14 |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - | `Eigen::BiCGSTAB<IncompleteLUT>` |           - |           - | skipped: did not actually succeed: backward error 1 exceeds 1e-06 |
@@ -123,8 +123,8 @@ same as the C++ side's own ranking logic.
 | Rank |                          Method |      Factor |       Solve | Backward error |
 |-----:|--------------------------------:|------------:|------------:|----------------:|
 | 🥇 1 |       catamari::SparseLDL (LDLᵀ) |     45 secs |      1 secs |     1.17789e-09 |
-| 🥈 2 |                  Eigen::SparseLU | 1.1e+02 secs |    1.4 secs |     1.42071e-12 |
-| 🥉 3 |               MA57 (symla, LDLᵀ) | 1.5e+02 secs |    1.6 secs |     2.67506e-10 |
+| 🥈 2 |               MA57 (symla, LDLᵀ) |     59 secs |    4.1 secs |      1.7388e-10 |
+| 🥉 3 |                  Eigen::SparseLU | 1.1e+02 secs |    1.4 secs |     1.42071e-12 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: known crash risk: excessive MKL thread churn on this system's fill-in |
 |    - |            Eigen::SimplicialLDLT |           - |           - | skipped: known crash: SIGSEGV in Eigen's unpivoted LDLT at this scale |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
@@ -240,3 +240,8 @@ same as the C++ side's own ranking logic.
 > bonus cleanup). Still the slowest solver on most systems here -- a new,
 > from-scratch implementation (see `ma57/README.md`) without the decades of
 > tuning behind CHOLMOD/Pardiso/UMFPACK -- but no longer implausibly so.
+> **Further improved** after bumping the `ma57/` submodule to its latest
+> `master` (a panel-blocked dense LDLᵀ kernel for large fronts, plus
+> cost-based/adaptive task-DAG scheduling): k=3 Triharmonic 100s -> 63s,
+> k=5 Mixed Triharmonic 150s -> 59s, everything else roughly flat or
+> slightly improved -- these numbers reflect that bump.
