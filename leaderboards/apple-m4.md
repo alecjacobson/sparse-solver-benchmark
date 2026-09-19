@@ -30,7 +30,7 @@ Regenerate with:
 |    7 |                 Eigen::UmfPackLU |     0.71 secs |      0.2 secs |     2.71385e-16 |
 |    8 | `Eigen::BiCGSTAB<IncompleteLUT>` |     0.85 secs |     0.59 secs |     3.91637e-16 |
 |    9 |                  Eigen::SparseLU |      2.3 secs |    0.084 secs |     2.38898e-15 |
-|   10 |                     MA57 (symla) |      2.8 secs |    0.064 secs |      1.0304e-15 |
+|   10 |                     MA57 (symla) |      3.1 secs |    0.05 secs |     9.73776e-16 |
 |   11 |  `Eigen::CG<IncompleteCholesky>` |     0.27 secs |      9.9 secs |      4.0063e-09 |
 
 # Biharmonic
@@ -46,7 +46,7 @@ Regenerate with:
 |    7 |              catamari::SparseLDL |      6.6 secs |     0.17 secs |     3.66465e-15 |
 |    8 | `Eigen::BiCGSTAB<IncompleteLUT>` |        6 secs |      1.8 secs |     5.55785e-16 |
 |    9 |                  Eigen::SparseLU |       13 secs |     0.28 secs |     4.51828e-12 |
-|   10 |                     MA57 (symla) |       20 secs |     0.12 secs |     4.95481e-15 |
+|   10 |                     MA57 (symla) |       15 secs |     0.12 secs |     4.90111e-15 |
 |    - |  `Eigen::CG<IncompleteCholesky>` |           - |           - | skipped: did not actually succeed: backward error 0.006303 exceeds 1e-06 |
 
 # Triharmonic
@@ -59,8 +59,8 @@ Regenerate with:
 |    4 |             Eigen::SimplicialLLT |       26 secs |     0.68 secs |     5.90259e-13 |
 |    5 |            Eigen::SimplicialLDLT |       26 secs |     0.74 secs |     3.99303e-13 |
 |    6 |              catamari::SparseLDL |       35 secs |     0.41 secs |     9.05897e-13 |
-|    7 |                  Eigen::SparseLU |       64 secs |      1.4 secs |     5.65782e-09 |
-|    8 |                     MA57 (symla) |       95 secs |     0.26 secs |     7.25797e-14 |
+|    7 |                     MA57 (symla) |       41 secs |     0.21 secs |     7.20981e-14 |
+|    8 |                  Eigen::SparseLU |       64 secs |      1.4 secs |     5.65782e-09 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
 |    - | `Eigen::BiCGSTAB<IncompleteLUT>` |           - |           - | skipped: did not actually succeed: backward error is NaN (solver diverged) |
 |    - |  `Eigen::CG<IncompleteCholesky>` |           - |           - | skipped: did not actually succeed: backward error 0.006508 exceeds 1e-06 |
@@ -74,7 +74,7 @@ Regenerate with:
 | 🥉 3 |                 Eigen::UmfPackLU |      5.1 secs |      1.2 secs |     3.87298e-16 |
 |    4 |     catamari::SparseLDL (LDLᵀ) |      7.1 secs |     0.19 secs |     4.69765e-08 |
 |    5 |                  Eigen::SparseLU |       13 secs |     0.31 secs |     3.26471e-14 |
-|    6 |             MA57 (symla, LDLᵀ) |       22 secs |     0.21 secs |     2.25769e-08 |
+|    6 |             MA57 (symla, LDLᵀ) |       15 secs |     0.16 secs |     3.07002e-08 |
 |    - |      Eigen::CholmodSupernodalLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
 |    - |        Accelerate SparseCholesky |           - |           - | skipped: factorization failed: status -1 |
@@ -87,8 +87,8 @@ Regenerate with:
 |-----:|--------------------------------:|------------:|------------:|----------------:|
 | 🥇 1 |                        NASOQ LBL |      2.8 secs |     0.37 secs |     5.70661e-11 |
 | 🥈 2 |     catamari::SparseLDL (LDLᵀ) |       26 secs |     0.52 secs |     1.55308e-09 |
-| 🥉 3 |                  Eigen::SparseLU |       50 secs |      1.4 secs |     3.47129e-12 |
-|    4 |             MA57 (symla, LDLᵀ) |    1e+02 secs |     0.46 secs |     2.65418e-10 |
+| 🥉 3 |             MA57 (symla, LDLᵀ) |       41 secs |     0.33 secs |     1.93908e-10 |
+|    4 |                  Eigen::SparseLU |       50 secs |      1.4 secs |     3.47129e-12 |
 |    - |                 Eigen::UmfPackLU |           - |           - | skipped: known crash risk: excessive MKL thread churn on this system's fill-in |
 |    - |            Eigen::SimplicialLDLT |           - |           - | skipped: known crash: SIGSEGV in Eigen's unpivoted LDLT at this scale |
 |    - |             Eigen::SimplicialLLT |           - |           - | skipped: factorization failed: NumericalIssue (not SPD/singular?) |
@@ -193,6 +193,19 @@ Regenerate with:
 > bug in Accelerate's Bunch-Kaufman pivoting or supernodal blocking at
 > scale, not investigated further -- OpenBLAS remains this project's NASOQ
 > backend on Apple Silicon.
-> Apple Accelerate support for NASOQ's BLAS backend
-> (https://github.com/sympiler/nasoq/pull/27) remains unmerged and was not
-> pursued in this pass; OpenBLAS was sufficient to get correct results.
+
+> [!NOTE]
+> **`MA57 (symla)`'s numbers above are from an updated submodule pin**
+> (`b62c30e` &rarr; `18c6d4e`), picking up several performance changes:
+> cost-based task-DAG scheduling, a panel-blocked dense LDL^T kernel for
+> large fronts, a cached masked top-L block in the solve path, and a more
+> compact `O(n)` block-diagonal `D` representation. Net effect on this
+> machine: roughly unchanged on the smallest system (Harmonic, ~2.8s to
+> ~3.1s), but a consistent **~1.3-2.3x speedup** everywhere fill-in is
+> heavier -- Biharmonic 20s to 15s, Triharmonic 95s to 41s (moving it ahead
+> of `Eigen::SparseLU` in that ranking), Mixed Biharmonic 22s to 15s, Mixed
+> Triharmonic 100s to 41s (likewise overtaking `Eigen::SparseLU`). OpenMP
+> parallelism is still off on this machine (same reason as elsewhere in
+> this file -- no Homebrew `libomp` wired into this build), so symla's new
+> `solve()` task-DAG parallelism isn't actually exercised here; these are
+> single-threaded numbers.
